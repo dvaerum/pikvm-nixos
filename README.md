@@ -17,30 +17,41 @@ updates itself from this repository.
   itself, so a `git push` to `main` rolls out to every KVM on its next cycle.
 - **Idiomatic NixOS**: declarative options instead of imperative setup scripts.
 
-## Layout
+## Targets
 
-```
-flake.nix              # entry point: packages, nixosModules, nixosConfigurations
-overlays/              # the `pikvm` package scope, layered onto nixpkgs
-pkgs/                  # PiKVM-specific derivations (ustreamer, kvmd, …)
-modules/               # NixOS modules (services.pikvm.*)
-  system/auto-upgrade.nix   # weekly self-referencing upgrade
-hosts/                 # buildable device configs (pi4, …) + shared common.nix
-```
+Two vendor-kernel targets (Raspberry Pi vendor kernel, needed for TC358743 CSI
+capture + hardware H.264), plus a mainline single-image fallback:
 
-## Build an image
+| Attribute | Board | Notes |
+|---|---|---|
+| `rpi4` | Raspberry Pi 4 | **required target**, vendor kernel |
+| `zero2w` | Raspberry Pi Zero 2 W | bonus target, vendor kernel |
+| `universal` | any (Pi 4 + Zero 2 W + CM4) | mainline kernel; single `.img` file, weaker capture |
+
+## Install straight to an SD card
+
+The simplest path — format **and** install in one command (via
+[disko](https://github.com/nix-community/disko)):
 
 ```sh
-# Build the SD image for the Pi 4 target (needs an aarch64-linux builder,
-# native or remote; see the Nix manual on remote/cross builds).
-nix build .#nixosConfigurations.pi4.config.system.build.sdImage
+nix run .#install-sd -- --board rpi4 /dev/diskX     # ⚠ erases /dev/diskX
+# or: --board zero2w
+```
 
-# Flash it (adjust /dev/sdX):
+Building the aarch64 system from an x86_64 host works too (cross-build); enable
+`boot.binfmt.emulatedSystems = [ "aarch64-linux" ];` on the build host.
+
+### Or build an image file
+
+```sh
+# Mainline single image that boots any supported board:
+nix build .#nixosConfigurations.universal.config.system.build.sdImage
 zstdcat result/sd-image/*.img.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-On first boot the device comes up headless with SSH. Set your SSH keys and any
-site config in `hosts/`, push, and it converges on the next weekly upgrade.
+On first boot the device comes up headless with SSH and auto-detects its
+capture hardware. Set your SSH keys / site config in `hosts/`, push, and it
+converges on the next weekly upgrade.
 
 ## Use it in your own flake
 

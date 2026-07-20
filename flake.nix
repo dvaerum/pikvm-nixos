@@ -45,8 +45,14 @@
       );
 
       # ---- NixOS modules --------------------------------------------------
+      # `pikvm`    — just the services.pikvm.* options + package overlay, to
+      #              compose into your own system.
+      # `appliance`— the whole opinionated PiKVM system (universal image,
+      #              services, defaults) to import and override. Best default
+      #              for downstream users who want to build on this.
       nixosModules = rec {
         pikvm = import ./modules;
+        appliance = import ./hosts/appliance.nix;
         default = pikvm;
       };
 
@@ -55,6 +61,14 @@
       # target system to be available on the evaluating host.
       nixosConfigurations = import ./hosts {
         inherit nixpkgs self;
+      };
+
+      # ---- Template ------------------------------------------------------
+      # `nix flake init -t github:dvaerum/pikvm-nixos` scaffolds a downstream
+      # flake that builds its own PiKVM image on top of this one.
+      templates.default = {
+        path = ./template;
+        description = "A PiKVM system built on pikvm-nixos";
       };
 
       # ---- Dev ergonomics -------------------------------------------------

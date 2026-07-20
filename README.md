@@ -42,6 +42,46 @@ zstdcat result/sd-image/*.img.zst | sudo dd of=/dev/sdX bs=4M conv=fsync status=
 On first boot the device comes up headless with SSH. Set your SSH keys and any
 site config in `hosts/`, push, and it converges on the next weekly upgrade.
 
+## Use it in your own flake
+
+This repo is meant to be built on. Fastest start — scaffold a downstream flake:
+
+```sh
+nix flake init -t github:dvaerum/pikvm-nixos
+# edit flake.nix (hostname, SSH key, auto-upgrade source), then:
+nix build .#nixosConfigurations.mykvm.config.system.build.sdImage
+```
+
+Or wire it in by hand:
+
+```nix
+{
+  inputs.pikvm-nixos.url = "github:dvaerum/pikvm-nixos";
+  outputs = { self, pikvm-nixos, ... }: {
+    nixosConfigurations.mykvm = pikvm-nixos.inputs.nixpkgs.lib.nixosSystem {
+      system = "aarch64-linux";
+      modules = [
+        pikvm-nixos.nixosModules.appliance   # whole PiKVM system, override as needed
+        { networking.hostName = "mykvm"; /* ... */ }
+      ];
+    };
+  };
+}
+```
+
+Exposed outputs:
+
+| Output | What it is |
+|---|---|
+| `nixosModules.appliance` | The complete PiKVM system (universal image + services + defaults). Import and override. |
+| `nixosModules.pikvm` (`.default`) | Just the `services.pikvm.*` options + package overlay, to compose your own system. |
+| `overlays.default` | The `pikvm.*` packages (`ustreamer`, `kvmd`, …) layered onto nixpkgs. |
+| `packages.<system>.{ustreamer,kvmd,…}` | The derivations directly. |
+| `nixosConfigurations.universal` | The prebuilt universal image config. |
+| `templates.default` | Scaffold for a downstream flake. |
+
+Pin and bump the base on your own schedule with `nix flake update pikvm-nixos`.
+
 ## License
 
 See upstream PiKVM component licenses; this packaging is provided as-is.

@@ -11,5 +11,10 @@ in
   ustreamer = scope.callPackage ./ustreamer { };
 
   inherit luma-oled;
-  kvmd = pythonPackages.callPackage ./kvmd { inherit luma-oled; };
+  kvmd = pythonPackages.callPackage ./kvmd {
+    inherit luma-oled;
+    # Xlib is `xlib` on 26.05 and `python-xlib` on unstable — accept either so
+    # kvmd builds regardless of which nixpkgs the consuming system uses.
+    xlib = pythonPackages.xlib or pythonPackages.python-xlib;
+  };
 }

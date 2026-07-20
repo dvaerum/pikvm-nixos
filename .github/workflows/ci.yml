@@ -36,7 +36,13 @@ jobs:
         with:
           extra-conf: |
             extra-platforms = aarch64-linux
+            extra-substituters = https://nixos-raspberrypi.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
       - name: Build ustreamer (aarch64-linux)
         run: nix build --print-build-logs .#packages.aarch64-linux.ustreamer
       - name: Build kvmd (aarch64-linux)
         run: nix build --print-build-logs .#packages.aarch64-linux.kvmd
+      - name: Build the Pi 4 vendor-kernel system (kernel from binary cache)
+        run: |
+          nix build --print-build-logs \
+            .#nixosConfigurations.rpi4.config.system.build.toplevel

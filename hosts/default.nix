@@ -1,19 +1,31 @@
-# Buildable device configuration.
+# Buildable device configurations.
 #
-#   nix build .#nixosConfigurations.universal.config.system.build.sdImage
+# Vendor-kernel, per-board targets built with nixos-raspberrypi (Pi 4 is the
+# required one; Zero 2 W to follow). Install straight to a card with:
 #
-# produces the single universal SD-card image: it boots on any supported
-# Raspberry Pi (required: Pi 4; bonus: Pi Zero 2 W; also CM4) and detects its
-# hardware at runtime. The same configuration is what each device rebuilds
-# itself into on its weekly auto-upgrade.
+#   nix run .#install-sd -- --board rpi4 /dev/diskX      # format + install
 #
-# The system itself is the reusable `appliance` module, so this is a thin
-# wrapper — downstream users import that module the same way (see ./template).
+# The older mainline multi-board `universal` image is kept as the "literally
+# one image file" fallback (build its sdImage as before).
 {
   nixpkgs,
+  nixos-raspberrypi,
+  disko,
   self,
 }:
 {
+  # Raspberry Pi 4 — required target, RPi vendor kernel + disko.
+  rpi4 = nixos-raspberrypi.lib.nixosSystem {
+    specialArgs = { inherit self nixos-raspberrypi disko; };
+    modules = [
+      self.nixosModules.pikvm
+      ./common.nix
+      ./rpi4.nix
+    ];
+  };
+
+  # Mainline, multi-board single image (Pi 4 + Zero 2 W). Fallback / image-file
+  # path; weaker CSI capture than the vendor kernel.
   universal = nixpkgs.lib.nixosSystem {
     system = "aarch64-linux";
     specialArgs = { inherit self; };

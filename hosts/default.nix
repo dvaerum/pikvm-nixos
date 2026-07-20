@@ -19,6 +19,7 @@
     specialArgs = { inherit self nixos-raspberrypi disko; };
     modules = [
       self.nixosModules.pikvm
+      self.nixosModules.mcp-server
       ./common.nix
       ./rpi4.nix
     ];
@@ -29,6 +30,7 @@
     specialArgs = { inherit self nixos-raspberrypi disko; };
     modules = [
       self.nixosModules.pikvm
+      self.nixosModules.mcp-server
       ./common.nix
       ./zero2w.nix
     ];

@@ -92,6 +92,26 @@ symlink, so — unlike upstream — it works in **any** USB port.
 On the iPad itself: turn **AssistiveTouch off** (Settings → Accessibility →
 Touch), and use Safari/Firefox for the web UI.
 
+## MCP server ("give AI agents hands")
+
+The image bundles the [PiKVM MCP server](https://github.com/dvaerum/pikvm_mcp_server)
+— an MCP endpoint that lets an AI agent drive the target's keyboard/mouse/screen
+(with vision-based mouse auto-calibration). It's **off by default**; enable it as
+a hardened systemd service (`services.pikvm-mcp`), pointing it at the local kvmd:
+
+```nix
+services.pikvm-mcp = {
+  enable = true;
+  host = "https://127.0.0.1";          # the device's own kvmd
+  passwordFile = "/run/secrets/pikvm-password";   # sops-nix / agenix / plain file
+  # address = "0.0.0.0"; openFirewall = true;     # to reach it from a remote MCP client
+};
+```
+
+Secrets are delivered via systemd `LoadCredential` (never in the Nix store or the
+process environment). The server listens on port 3000 (`/mcp`). The package is
+also available directly as `.#packages.<system>.pikvm-mcp-server`.
+
 ## How the update chain works
 
 ```

@@ -14,7 +14,9 @@ buildPythonPackage rec {
   pyproject = true;
 
   src = fetchPypi {
-    pname = "luma.oled";
+    # PyPI serves the sdist under the PEP 625 normalised name (underscores),
+    # so the dotted "luma.oled" URL 404s.
+    pname = "luma_oled";
     inherit version;
     hash = "sha256-FpJf5mj0hIA98Gg63YALGeXdcxah1k6wbsKugXRzkB4=";
   };

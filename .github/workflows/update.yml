@@ -23,6 +23,12 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          swap-storage: false
       - uses: docker/setup-qemu-action@v3
       - uses: DeterminateSystems/nix-installer-action@main
         with:

@@ -82,6 +82,12 @@ Exposed outputs:
 
 Pin and bump the base on your own schedule with `nix flake update pikvm-nixos`.
 
+## Documentation
+
+- **[docs/customizing.md](docs/customizing.md)** — the full guide: layering a
+  downstream flake vs. forking, every option, how the weekly update chain
+  works, and pinning a platform. Start here to make your own modified version.
+
 ## License
 
 See upstream PiKVM component licenses; this packaging is provided as-is.

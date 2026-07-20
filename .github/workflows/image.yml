@@ -22,6 +22,14 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+      # SD-image builds are multi-GB; reclaim ~30 GB of preinstalled tooling
+      # from the runner so the image assembles.
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          swap-storage: false
       - uses: docker/setup-qemu-action@v3
       - uses: DeterminateSystems/nix-installer-action@main
         with:

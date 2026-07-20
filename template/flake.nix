@@ -34,6 +34,10 @@
               # Example kvmd tweak (declarative override):
               # services.pikvm.kvmd.settings = { kvmd.streamer.desired_fps.default = 30; };
 
+              # Controlling an iPad over a USB HDMI grabber (MS2109)? One switch
+              # applies all the HID/streamer fixes (see docs/customizing.md):
+              # services.pikvm.kvmd.ipadCompat.enable = true;
+
               # Pin a specific platform instead of auto-detect, if you like:
               # services.pikvm.kvmd.platform = "v2-hdmi-rpi4";
             }

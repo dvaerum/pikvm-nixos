@@ -25,8 +25,44 @@
 let
   cfg = config.services.pikvm.kvmd;
 
-  kvmd = cfg.package;
   ustreamer = cfg.ustreamer;
+
+  # iPadOS needs the absolute-mouse HID to advertise the boot mouse interface
+  # (protocol=2, subclass=1) or it ignores clicks. Upstream hardcodes
+  # protocol=0/subclass=0, so we patch it at BUILD time — no read-only-fs
+  # dance, no re-apply-after-upgrade hook; it's simply baked into the package.
+  kvmd =
+    if cfg.ipadCompat.enable then
+      cfg.package.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace kvmd/apps/otg/hid/mouse.py \
+            --replace-fail 'protocol=0,  # None protocol' 'protocol=2,  # Mouse protocol' \
+            --replace-fail 'subclass=0,  # No subclass' 'subclass=1,  # Boot interface subclass'
+        '';
+      })
+    else
+      cfg.package;
+
+  # iPadOS compatibility overrides (the working values from the iPad setup
+  # guide). Applied as an early override.d entry so the user's own `settings`
+  # (10-settings) still win over it.
+  ipadSettings = {
+    kvmd = {
+      streamer = {
+        resolution = "1280x720"; # match iPad HDMI 16:9, lowest bandwidth
+        desired_fps = 30; # smoother than 60 over USB 2.0
+        cmd_append = [ "--buffers=1" ]; # much lower capture latency
+      };
+      hid = {
+        mouse = {
+          absolute = false; # relative mode; iPadOS treats absolute as touch
+          horizontal_wheel = false;
+        };
+        mouse_alt.device = ""; # disable the 2nd mouse; confuses iPadOS
+      };
+    };
+  };
+  ipadOverride = pkgs.writeText "05-ipad.yaml" (builtins.toJSON ipadSettings);
 
   configsDefault = "${kvmd}/share/kvmd/configs.default";
 
@@ -235,6 +271,15 @@ in
         hand-editing /etc/kvmd/override.yaml. Follows the upstream config tree.
       '';
     };
+
+    ipadCompat.enable = lib.mkEnableOption ''
+      iPadOS compatibility. Bundles everything from the PiKVM-on-iPad setup
+      guide declaratively: patches the absolute-mouse HID to advertise the boot
+      mouse interface (protocol=2/subclass=1, so iPadOS accepts clicks), forces
+      relative mouse mode, disables the secondary mouse, and applies the tuned
+      USB-capture streamer settings (1280x720@30, --buffers=1). Your own
+      `settings` still override these
+    '';
   };
 
   config = lib.mkIf cfg.enable {
@@ -270,12 +315,18 @@ in
       "kvmd/override.yaml".text = "";
       "kvmd/override.d/00-nixos-paths.yaml".source = nixosPaths;
       "kvmd/override.d/10-settings.yaml".source = userSettings;
+    }
+    // lib.optionalAttrs cfg.ipadCompat.enable {
+      "kvmd/override.d/05-ipad.yaml".source = ipadOverride;
     };
 
     # The main config captures from /dev/kvmd-video; give the capture device a
-    # stable name whether it's a TC358743 (CSI) or a USB (UVC) grabber.
+    # stable name whether it's a TC358743 (CSI) or a USB (UVC) grabber. Unlike
+    # upstream's port-locked udev helper, we match the device by identity, so
+    # the MacroSilicon MS2109 grabber works in any USB port.
     services.udev.extraRules = ''
       SUBSYSTEM=="video4linux", ATTR{name}=="tc358743", SYMLINK+="kvmd-video"
+      SUBSYSTEM=="video4linux", ATTRS{idVendor}=="534d", ATTRS{idProduct}=="2109", ATTR{index}=="0", SYMLINK+="kvmd-video"
       SUBSYSTEM=="video4linux", ENV{ID_V4L_CAPABILITIES}==":capture:", ENV{ID_USB_INTERFACES}=="*:0e02*", ATTR{index}=="0", SYMLINK+="kvmd-video"
     '';
 

@@ -26,6 +26,7 @@ Everything you can set lives behind the module options:
 |---|---|
 | `services.pikvm.kvmd.platform` | `"auto"` (default) or a fixed `v2-hdmi-rpi4`-style profile |
 | `services.pikvm.kvmd.settings` | Declarative kvmd override (the config tree), e.g. `{ kvmd.streamer.desired_fps.default = 30; }` |
+| `services.pikvm.kvmd.ipadCompat.enable` | iPadOS compatibility preset (see below) |
 | `services.pikvm.otg.enable` | USB HID/MSD gadget (on by default in the appliance) |
 | `services.pikvm.autoUpgrade.{flake,dates,allowReboot,enable}` | Weekly self-update source & policy |
 
@@ -61,6 +62,35 @@ hosts/       common.nix (defaults), universal.nix (image + config.txt), applianc
 overlays/    exposes the pikvm.* package scope onto nixpkgs
 template/    the scaffold used by Option A
 ```
+
+## Controlling an iPad (iPadOS compatibility)
+
+Controlling an iPad over a USB HDMI grabber (e.g. the MacroSilicon MS2109)
+needs a few HID/streamer adjustments. On Arch-PiKVM that's a whole checklist —
+edit `override.yaml`, `sed`-patch `mouse.py`, add a pacman hook so the patch
+survives upgrades, fiddle with USB ports. Here it's one option:
+
+```nix
+services.pikvm.kvmd.ipadCompat.enable = true;
+```
+
+That single switch, declaratively:
+
+- **patches the absolute-mouse HID at build time** to advertise the boot mouse
+  interface (`protocol=2`/`subclass=1`) — iPadOS ignores clicks otherwise. It's
+  baked into the package, so it simply *can't* be lost on an upgrade (no
+  re-apply hook needed).
+- forces **relative mouse mode** and disables the secondary mouse (absolute
+  reports read as touch/gestures on iPadOS),
+- applies the tuned USB-capture streamer settings (`1280x720@30`, `--buffers=1`
+  for low latency).
+
+Your own `services.pikvm.kvmd.settings` still override any of these. The MS2109
+grabber is matched by its USB id (`534d:2109`) for the `/dev/kvmd-video`
+symlink, so — unlike upstream — it works in **any** USB port.
+
+On the iPad itself: turn **AssistiveTouch off** (Settings → Accessibility →
+Touch), and use Safari/Firefox for the web UI.
 
 ## How the update chain works
 

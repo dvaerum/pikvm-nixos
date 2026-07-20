@@ -5,12 +5,26 @@
     # Stable NixOS 26.05 — the long-term base for the appliance. It already
     # carries Python 3.14 (which kvmd requires) and every kvmd dependency.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+
+    # Raspberry Pi vendor kernel + firmware + config.txt/overlay support —
+    # what PiKVM's TC358743 CSI capture and hardware H.264 actually need.
+    nixos-raspberrypi.url = "github:nvmd/nixos-raspberrypi";
+
+    # Declarative partitioning + direct-to-SD install. Pinned to PR #1190
+    # (cross-compiled disk formatting) so the aarch64 image can be built and
+    # written from an x86_64 host.
+    disko = {
+      url = "github:nix-community/disko?ref=pull/1190/merge";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
     {
       self,
       nixpkgs,
+      nixos-raspberrypi,
+      disko,
       ...
     }:
     let

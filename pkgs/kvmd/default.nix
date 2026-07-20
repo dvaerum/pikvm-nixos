@@ -153,5 +153,6 @@ buildPythonApplication rec {
     description = "The main PiKVM daemon (KVM-over-IP for Raspberry Pi)";
     license = lib.licenses.gpl3Only;
     platforms = lib.platforms.linux;
+    mainProgram = "kvmd";
   };
 }

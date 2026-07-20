@@ -6,8 +6,7 @@
   imports = [
     ./system/auto-upgrade.nix
     ./otg.nix
-    # ./ustreamer.nix
-    # ./kvmd.nix
+    ./kvmd.nix
   ];
 
   # Make the PiKVM package scope (`pkgs.pikvm.*`) available to every module

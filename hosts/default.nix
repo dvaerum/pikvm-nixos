@@ -24,6 +24,16 @@
     ];
   };
 
+  # Raspberry Pi Zero 2 W — bonus target, RPi vendor kernel + disko.
+  zero2w = nixos-raspberrypi.lib.nixosSystem {
+    specialArgs = { inherit self nixos-raspberrypi disko; };
+    modules = [
+      self.nixosModules.pikvm
+      ./common.nix
+      ./zero2w.nix
+    ];
+  };
+
   # Mainline, multi-board single image (Pi 4 + Zero 2 W). Fallback / image-file
   # path; weaker CSI capture than the vendor kernel.
   universal = nixpkgs.lib.nixosSystem {

@@ -42,7 +42,8 @@ jobs:
         run: nix build --print-build-logs .#packages.aarch64-linux.ustreamer
       - name: Build kvmd (aarch64-linux)
         run: nix build --print-build-logs .#packages.aarch64-linux.kvmd
-      - name: Build the Pi 4 vendor-kernel system (kernel from binary cache)
+      - name: Build the vendor-kernel systems (kernels from binary cache)
         run: |
           nix build --print-build-logs \
-            .#nixosConfigurations.rpi4.config.system.build.toplevel
+            .#nixosConfigurations.rpi4.config.system.build.toplevel \
+            .#nixosConfigurations.zero2w.config.system.build.toplevel

@@ -20,6 +20,18 @@
 
   networking.hostName = "pikvm";
 
+  # Board-specific capture config: TC358743 CSI bridge + GPU memory.
+  hardware.raspberry-pi.config.all = {
+    options.gpu_mem = {
+      enable = true;
+      value = 128;
+    };
+    dt-overlays.tc358743 = {
+      enable = true;
+      params = { };
+    };
+  };
+
   # Devices self-update from this configuration (attribute `rpi4`).
   services.pikvm.autoUpgrade.flake = lib.mkDefault "github:dvaerum/pikvm-nixos#rpi4";
 

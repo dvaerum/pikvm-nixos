@@ -9,7 +9,7 @@ on:
     inputs:
       host:
         description: Host configuration to build
-        default: pi4
+        default: universal
         type: string
   schedule:
     # Mondays 04:17 UTC — a canary that the image still builds.
@@ -17,7 +17,7 @@ on:
 
 jobs:
   image:
-    name: Build ${{ inputs.host || 'pi4' }} SD image
+    name: Build ${{ inputs.host || 'universal' }} SD image
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -29,12 +29,12 @@ jobs:
             extra-platforms = aarch64-linux
       - name: Build SD image (aarch64 under emulation — slow)
         run: |
-          host="${{ inputs.host || 'pi4' }}"
+          host="${{ inputs.host || 'universal' }}"
           nix build --print-build-logs \
             ".#nixosConfigurations.${host}.config.system.build.sdImage"
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sd-image-${{ inputs.host || 'pi4' }}
+          name: sd-image-${{ inputs.host || 'universal' }}
           path: result/sd-image/*.img*
           if-no-files-found: error

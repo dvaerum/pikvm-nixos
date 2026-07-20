@@ -38,6 +38,9 @@
   # operate on a headless appliance.
   security.sudo.wheelNeedsPassword = lib.mkDefault false;
 
+  # No ZFS on a Pi appliance — it only bloats the image and initrd.
+  boot.supportedFilesystems.zfs = lib.mkForce false;
+
   # Sensible appliance defaults.
   time.timeZone = lib.mkDefault "UTC";
   console.keyMap = lib.mkDefault "us";

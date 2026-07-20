@@ -19,10 +19,10 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - name: flake check (eval only, all systems)
         run: nix flake check --all-systems --no-build
-      - name: Instantiate the Pi 4 system (catches config/module errors)
+      - name: Instantiate the universal system (catches config/module errors)
         run: |
           nix eval --raw \
-            .#nixosConfigurations.pi4.config.system.build.toplevel.drvPath
+            .#nixosConfigurations.universal.config.system.build.toplevel.drvPath
 
   build-packages:
     name: Build packages (aarch64 via emulation)

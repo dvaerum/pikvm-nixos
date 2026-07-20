@@ -2,18 +2,20 @@
 #
 # Design notes (see the upstream Arch packaging this replaces):
 #   * kvmd loads a *main config* (`--main-config`) plus `/etc/kvmd/override.yaml`
-#     and everything in `/etc/kvmd/override.d/`. We generate the main config
-#     from the selected platform profile and rewrite the one Arch-ism in it
-#     (`/usr/bin/ustreamer`) to the Nix store path.
+#     and everything in `/etc/kvmd/override.d/`. We bake every platform profile
+#     from the kvmd package (rewriting the one Arch-ism, `/usr/bin/ustreamer`,
+#     to the Nix store path) and select one — either a fixed profile or, with
+#     `platform = "auto"`, whichever a boot-time detector picks for the board
+#     it finds itself on. This is what lets a single image serve every device.
 #   * The remaining hardcoded `/usr/...` defaults baked into kvmd's schema
 #     (keymaps, extras, the platform id file, vcgencmd) are corrected through a
 #     store-provided override in `override.d/`, so upstream configs stay pristine.
 #   * `services.pikvm.kvmd.settings` is a declarative freeform override for the
 #     user — the idiomatic replacement for hand-editing /etc/kvmd/override.yaml.
 #
-# Scope of THIS module: the kvmd + kvmd-media daemons, users/groups, runtime
-# dirs, and config wiring. The nginx web entrypoint, OTG networking and Janus
-# WebRTC are separate modules layered on top.
+# Scope of THIS module: the kvmd + kvmd-media daemons, platform selection,
+# users/groups, runtime dirs, and config wiring. The nginx web entrypoint, OTG
+# networking and Janus WebRTC are separate modules layered on top.
 {
   config,
   lib,
@@ -28,25 +30,85 @@ let
 
   configsDefault = "${kvmd}/share/kvmd/configs.default";
 
-  # "v2-hdmi-rpi4" -> base=v2, video=hdmi, board=rpi4
+  isAuto = cfg.platform == "auto";
+
+  # Every platform profile (the app's main config), each with the ustreamer
+  # path rewritten from the Arch location to our derivation. The detector (or
+  # a fixed selection) picks one of these at runtime.
+  mainConfigs = pkgs.runCommandLocal "kvmd-main-configs" { } ''
+    mkdir -p "$out"
+    for f in ${configsDefault}/kvmd/main/*.yaml; do
+      substitute "$f" "$out/$(basename "$f")" \
+        --replace-quiet /usr/bin/ustreamer ${lib.getExe ustreamer}
+    done
+  '';
+
+  # For a fixed platform, parse "<base>-<video>-<board>" and pre-bake its id
+  # file. For auto, the detector writes both at boot.
   parts = lib.splitString "-" cfg.platform;
-  platformBase = lib.elemAt parts 0;
-  platformVideo = lib.elemAt parts 1;
-  platformBoard = lib.elemAt parts 2;
-
-  # The platform profile is the app's main config, with the ustreamer path
-  # rewritten from the Arch location to our derivation.
-  mainConfig = pkgs.runCommandLocal "kvmd-main-${cfg.platform}.yaml" { } ''
-    substitute ${configsDefault}/kvmd/main/${cfg.platform}.yaml "$out" \
-      --replace-quiet /usr/bin/ustreamer ${lib.getExe ustreamer}
-  '';
-
-  # Replacement for Arch's /usr/lib/kvmd/platform id file.
   platformFile = pkgs.writeText "kvmd-platform" ''
-    PIKVM_MODEL=${platformBase}
-    PIKVM_VIDEO=${platformVideo}
-    PIKVM_BOARD=${platformBoard}
+    PIKVM_MODEL=${lib.elemAt parts 0}
+    PIKVM_VIDEO=${lib.elemAt parts 1}
+    PIKVM_BOARD=${lib.elemAt parts 2}
   '';
+
+  mainConfigPath = if isAuto then "/run/kvmd/main.yaml" else "${mainConfigs}/${cfg.platform}.yaml";
+  platformIdPath = if isAuto then "/run/kvmd/platform" else "${platformFile}";
+
+  # Boot-time hardware detector: figure out board + capture device and point
+  # kvmd at the matching profile. Heuristics; expected to be tuned on real
+  # hardware. Falls back to the common Pi 4 CSI profile.
+  detect = pkgs.writeShellApplication {
+    name = "kvmd-platform-detect";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      set -euo pipefail
+      configs=${mainConfigs}
+      model=""
+      [ -r /proc/device-tree/model ] && model=$(tr -d '\0' </proc/device-tree/model || true)
+
+      board=rpi4
+      case "$model" in
+        *"Zero 2"*)            board=zero2w ;;
+        *"Compute Module 4"*)  board=cm4 ;;
+        *"Compute Module 5"*)  board=cm4 ;;   # best effort
+        *"Pi 4"*)              board=rpi4 ;;
+        *"Pi 5"*)              board=rpi4 ;;   # best effort (unsupported video)
+      esac
+
+      # Official v3/v4 HATs identify themselves via a HAT EEPROM.
+      base=v2
+      if [ -r /proc/device-tree/hat/product ]; then
+        prod=$(tr -d '\0' </proc/device-tree/hat/product || true)
+        case "$prod" in
+          *v4plus*|*V4PLUS*|*"v4 plus"*) base=v4plus ;;
+          *v4mini*|*V4MINI*)             base=v4mini ;;
+          *v4*|*V4*)                     base=v4plus ;;
+          *v3*|*V3*)                     base=v3 ;;
+        esac
+      fi
+
+      # Capture device: a TC358743 (CSI) shows up as a v4l2 device by that
+      # name; otherwise assume a USB (UVC) grabber.
+      video=hdmiusb
+      for n in /sys/class/video4linux/*/name; do
+        [ -r "$n" ] || continue
+        if grep -qi tc358743 "$n"; then video=hdmi; break; fi
+      done
+
+      variant="$base-$video-$board"
+      if [ ! -e "$configs/$variant.yaml" ]; then
+        echo "kvmd-platform-detect: no profile '$variant' (model='$model'); falling back to v2-hdmi-rpi4" >&2
+        variant=v2-hdmi-rpi4
+        base=v2; video=hdmi; board=rpi4
+      fi
+
+      install -d -m 0775 -o kvmd -g kvmd /run/kvmd
+      ln -sf "$configs/$variant.yaml" /run/kvmd/main.yaml
+      printf 'PIKVM_MODEL=%s\nPIKVM_VIDEO=%s\nPIKVM_BOARD=%s\n' "$base" "$video" "$board" >/run/kvmd/platform
+      echo "kvmd-platform-detect: selected $variant" >&2
+    '';
+  };
 
   # Corrections for the /usr paths baked into kvmd's schema defaults. YAML is a
   # superset of JSON, so toJSON is a valid override document.
@@ -56,7 +118,7 @@ let
         info = {
           extras = "${kvmd}/share/kvmd/extras";
           hw = {
-            platform = "${platformFile}";
+            platform = platformIdPath;
             vcgencmd_cmd = [ (lib.getExe' pkgs.libraspberrypi "vcgencmd") ];
           };
         };
@@ -129,7 +191,7 @@ let
   # kvmd-selfauth).
   kvmdUsers = lib.subtractLists [ "kvmd-selfauth" ] kvmdGroups;
 
-  commonArgs = "--main-config ${mainConfig} "
+  commonArgs = "--main-config ${mainConfigPath} "
     + "--override-config /etc/kvmd/override.yaml "
     + "--override-dir /etc/kvmd/override.d";
 in
@@ -153,11 +215,13 @@ in
 
     platform = lib.mkOption {
       type = lib.types.str;
+      default = "auto";
       example = "v2-hdmi-rpi4";
       description = ''
-        PiKVM platform profile, `<base>-<video>-<board>` — selects the main
-        config and (via the platform module) the device-tree/boot settings.
-        Must match a profile shipped in the kvmd package
+        PiKVM platform profile as `<base>-<video>-<board>`, or `"auto"` (the
+        default) to detect board + capture device at boot and pick the profile
+        automatically — what makes one image usable on every device. A fixed
+        value must match a profile shipped in the kvmd package
         (share/kvmd/configs.default/kvmd/main/<platform>.yaml).
       '';
     };
@@ -208,6 +272,28 @@ in
       "kvmd/override.d/10-settings.yaml".source = userSettings;
     };
 
+    # The main config captures from /dev/kvmd-video; give the capture device a
+    # stable name whether it's a TC358743 (CSI) or a USB (UVC) grabber.
+    services.udev.extraRules = ''
+      SUBSYSTEM=="video4linux", ATTR{name}=="tc358743", SYMLINK+="kvmd-video"
+      SUBSYSTEM=="video4linux", ENV{ID_V4L_CAPABILITIES}==":capture:", ENV{ID_USB_INTERFACES}=="*:0e02*", ATTR{index}=="0", SYMLINK+="kvmd-video"
+    '';
+
+    # --- Platform detection (auto only) -----------------------------------
+    systemd.services.kvmd-platform-detect = lib.mkIf isAuto {
+      description = "PiKVM - Detect hardware platform";
+      before = [
+        "kvmd.service"
+        "kvmd-media.service"
+      ];
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = lib.getExe detect;
+      };
+    };
+
     # --- Services ---------------------------------------------------------
     systemd.services.kvmd = {
       description = "PiKVM - The main daemon";
@@ -216,7 +302,9 @@ in
         "network-online.target"
         "nss-lookup.target"
       ]
+      ++ lib.optional isAuto "kvmd-platform-detect.service"
       ++ lib.optional config.services.pikvm.otg.enable "kvmd-otg.service";
+      requires = lib.optional isAuto "kvmd-platform-detect.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       path = runtimePath;
@@ -235,7 +323,9 @@ in
 
     systemd.services.kvmd-media = {
       description = "PiKVM - Media proxy server";
-      after = [ "kvmd.service" ];
+      after = [ "kvmd.service" ]
+      ++ lib.optional isAuto "kvmd-platform-detect.service";
+      requires = lib.optional isAuto "kvmd-platform-detect.service";
       wantedBy = [ "multi-user.target" ];
       path = runtimePath;
       serviceConfig = {

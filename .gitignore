@@ -1,0 +1,13 @@
+# Nix
+result
+result-*
+.direnv/
+.pre-commit-config.yaml
+
+# Editors
+*.swp
+.DS_Store
+
+# Secrets / generated
+*.pem
+*.key

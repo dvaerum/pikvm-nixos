@@ -6,5 +6,7 @@
 # callPackage, and avoids clobbering unrelated nixpkgs attributes.
 final: prev:
 {
-  pikvm = prev.lib.makeScope final.newScope (self: import ../pkgs/scope.nix self);
+  pikvm = prev.lib.makeScope final.newScope (
+    scope: import ../pkgs/scope.nix { inherit scope; pkgs = final; }
+  );
 }

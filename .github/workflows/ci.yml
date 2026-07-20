@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: Evaluate flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: flake check (eval only, all systems)
+        run: nix flake check --all-systems --no-build
+      - name: Instantiate the Pi 4 system (catches config/module errors)
+        run: |
+          nix eval --raw \
+            .#nixosConfigurations.pi4.config.system.build.toplevel.drvPath
+
+  build-packages:
+    name: Build packages (aarch64 via emulation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Register binfmt_misc so the x86 runner can execute aarch64 binaries,
+      # letting Nix build aarch64-linux derivations under QEMU.
+      - uses: docker/setup-qemu-action@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-platforms = aarch64-linux
+      - name: Build ustreamer (aarch64-linux)
+        run: nix build --print-build-logs .#packages.aarch64-linux.ustreamer

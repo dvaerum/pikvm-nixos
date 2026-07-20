@@ -1,0 +1,40 @@
+name: Build SD image
+
+# Produces the flashable SD-card image in CI so a known-good image is always
+# downloadable for first-time flashing. Deployed devices don't need this —
+# they self-update from the flake — so this runs on demand (and weekly, to
+# catch image-build regressions), not on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: Host configuration to build
+        default: pi4
+        type: string
+  schedule:
+    # Mondays 04:17 UTC — a canary that the image still builds.
+    - cron: "17 4 * * 1"
+
+jobs:
+  image:
+    name: Build ${{ inputs.host || 'pi4' }} SD image
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-platforms = aarch64-linux
+      - name: Build SD image (aarch64 under emulation — slow)
+        run: |
+          host="${{ inputs.host || 'pi4' }}"
+          nix build --print-build-logs \
+            ".#nixosConfigurations.${host}.config.system.build.sdImage"
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sd-image-${{ inputs.host || 'pi4' }}
+          path: result/sd-image/*.img*
+          if-no-files-found: error

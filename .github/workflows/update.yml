@@ -1,0 +1,56 @@
+name: Update flake inputs
+
+# Weekly: bump the nixpkgs lock, build to prove it still works, and only then
+# commit the new flake.lock to main. Because deployed devices self-update from
+# this repo weekly, a build-verified lock bump here rolls out to every KVM on
+# its next cycle — the base stays current without manual work, and a bump that
+# doesn't build is never committed.
+on:
+  schedule:
+    - cron: "23 3 * * 1" # Mondays 03:23 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-platforms = aarch64-linux
+
+      - name: Bump nixpkgs
+        run: nix flake update nixpkgs
+
+      - name: Show lock diff
+        run: git --no-pager diff -- flake.lock || true
+
+      - name: Verify it still builds (aarch64 via emulation)
+        run: |
+          nix flake check --all-systems --no-build
+          nix build --print-build-logs \
+            .#packages.aarch64-linux.ustreamer \
+            .#packages.aarch64-linux.kvmd \
+            .#nixosConfigurations.universal.config.system.build.toplevel
+
+      - name: Commit the verified bump
+        run: |
+          if git diff --quiet -- flake.lock; then
+            echo "flake.lock unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name "pikvm-nixos-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add flake.lock
+          git commit -m "ci: weekly nixpkgs bump (build verified)"
+          git push

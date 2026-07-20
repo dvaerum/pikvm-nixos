@@ -8,7 +8,6 @@
 # rebuilds itself into on its weekly auto-upgrade.
 {
   nixpkgs,
-  nixos-hardware,
   self,
 }:
 let
@@ -19,7 +18,7 @@ let
     }:
     nixpkgs.lib.nixosSystem {
       inherit system;
-      specialArgs = { inherit nixos-hardware self; };
+      specialArgs = { inherit self; };
       modules = [
         self.nixosModules.pikvm
         ./common.nix

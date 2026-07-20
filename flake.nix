@@ -2,17 +2,15 @@
   description = "PiKVM on NixOS — a declarative, flake-based port of the PiKVM IP-KVM stack";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Raspberry Pi board support (device trees, firmware, board profiles).
-    nixos-hardware.url = "github:NixOS/nixos-hardware";
+    # Stable NixOS 26.05 — the long-term base for the appliance. It already
+    # carries Python 3.14 (which kvmd requires) and every kvmd dependency.
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      nixos-hardware,
       ...
     }:
     let
@@ -56,7 +54,7 @@
       # Populated in ./hosts; kept lazy so evaluation doesn't require the
       # target system to be available on the evaluating host.
       nixosConfigurations = import ./hosts {
-        inherit nixpkgs nixos-hardware self;
+        inherit nixpkgs self;
       };
 
       # ---- Dev ergonomics -------------------------------------------------

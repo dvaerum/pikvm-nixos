@@ -36,7 +36,7 @@
   pyghmi,
   python-pam,
   pillow,
-  python-xlib,
+  xlib, # python Xlib (attr is `xlib` on 26.05)
   hidapi,
   six,
   pyrad,
@@ -94,7 +94,7 @@ buildPythonApplication rec {
     pyghmi
     python-pam
     pillow
-    python-xlib
+    xlib
     hidapi
     six
     pyrad

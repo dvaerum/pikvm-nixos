@@ -134,11 +134,11 @@
     "pikvm-mcp-server": {
       "flake": false,
       "locked": {
-        "lastModified": 1784613140,
-        "narHash": "sha256-EFKIShA80UruSV3BaF3XBmDjPh+X/OzkER4qxj7HohQ=",
+        "lastModified": 1784614522,
+        "narHash": "sha256-NLacq2gMQKAnGgbJsEL9LVtBvFm+7LCYSUvawoXgT44=",
         "owner": "dvaerum",
         "repo": "pikvm_mcp_server",
-        "rev": "e3c27a1db7e542fffd9dce7bd29c92d75d45b9a4",
+        "rev": "0efd66f1566e773e321aa43c1869892806cbf73c",
         "type": "github"
       },
       "original": {

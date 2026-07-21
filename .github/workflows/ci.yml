@@ -48,4 +48,8 @@ jobs:
             .#nixosConfigurations.rpi4.config.system.build.toplevel \
             .#nixosConfigurations.zero2w.config.system.build.toplevel
       - name: Build the MCP server (x86_64, native)
+        # Non-blocking: onnxruntime-node is fixed upstream, but auto-patchelf
+        # still trips on sharp's musl prebuilts (libc.musl-*.so.1). Re-blocks
+        # once the upstream package.nix prunes/ignores the musl variants.
+        continue-on-error: true
         run: nix build --print-build-logs .#packages.x86_64-linux.pikvm-mcp-server

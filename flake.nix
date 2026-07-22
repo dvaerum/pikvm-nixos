@@ -19,12 +19,12 @@
     };
 
     # PiKVM MCP server — "give AI agents hands": an MCP endpoint that drives a
-    # PiKVM's keyboard/mouse/screen. Consumed as a plain source (flake = false)
-    # so we take just its self-contained NixOS module + package overlay and
-    # skip its home-manager-only `nixitin` input (an internal git server).
+    # PiKVM's keyboard/mouse/screen. Consumed as a proper flake (its former
+    # `nixitin` input was removed upstream), following our nixpkgs so its
+    # package builds against the same base as the rest of the image.
     pikvm-mcp-server = {
       url = "github:dvaerum/pikvm_mcp_server";
-      flake = false;
+      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
@@ -40,9 +40,6 @@
     let
       inherit (nixpkgs) lib;
 
-      # The MCP server's own overlay/module, taken directly from its source.
-      mcpOverlay = import "${pikvm-mcp-server}/nix/overlay.nix";
-
       # Systems on which we expose packages / devShells. The KVM itself is
       # aarch64-linux (Raspberry Pi); x86_64-linux is kept for CI and for
       # building images via cross-compilation / remote builders.
@@ -54,7 +51,7 @@
       forAllSystems = lib.genAttrs supportedSystems;
       pkgsFor = system: import nixpkgs {
         inherit system;
-        overlays = [ self.overlays.default mcpOverlay ];
+        overlays = [ self.overlays.default ];
       };
     in
     {
@@ -70,7 +67,7 @@
         in
         (import ./pkgs { inherit pkgs; })
         // {
-          inherit (pkgs) pikvm-mcp-server;
+          pikvm-mcp-server = pikvm-mcp-server.packages.${system}.default;
         }
       );
 
@@ -99,12 +96,13 @@
       #              for downstream users who want to build on this.
       nixosModules = rec {
         pikvm = import ./modules;
-        # The upstream MCP server's NixOS service (services.pikvm-mcp) plus its
-        # package overlay, re-exposed so devices and downstream users can
-        # enable it. Off unless `services.pikvm-mcp.enable = true`.
+        # The upstream MCP server's NixOS service (services.pikvm-mcp),
+        # re-exposed so devices and downstream users can enable it. Off unless
+        # `services.pikvm-mcp.enable = true`. Its nixosModules.default
+        # self-provides the package (services.pikvm-mcp.package default), so no
+        # global overlay is needed.
         mcp-server = {
-          imports = [ (import "${pikvm-mcp-server}/nix/nixos-module.nix") ];
-          nixpkgs.overlays = [ mcpOverlay ];
+          imports = [ pikvm-mcp-server.nixosModules.default ];
         };
         appliance = {
           imports = [

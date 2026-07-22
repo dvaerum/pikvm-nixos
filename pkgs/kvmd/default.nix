@@ -6,6 +6,7 @@
 # supplied by the NixOS module's PATH rather than baked in here.
 {
   lib,
+  stdenv,
   buildPythonApplication,
   fetchFromGitHub,
   makeWrapper,
@@ -51,6 +52,7 @@
   pyudev,
   evdev,
   gpiod, # libgpiod v2 python bindings
+  ustreamer-python, # `import ustreamer` — µStreamer's memsink module (pkgs/python/ustreamer)
 
   # Native library loaded via ctypes at runtime (keysym translation).
   libxkbcommon,
@@ -109,6 +111,7 @@ buildPythonApplication rec {
     pyudev
     evdev
     gpiod
+    ustreamer-python
   ];
 
   # kvmd loads libxkbcommon.so.0 through ctypes; make it resolvable from the
@@ -144,6 +147,21 @@ buildPythonApplication rec {
   # Fix #!/bin/bash etc. in the shipped scripts.
   postPatch = ''
     patchShebangs scripts
+
+    # kvmd.libc loads libc via ctypes.util.find_library("c"), which returns
+    # None at runtime on NixOS (no ld.so.cache / compiler in the service env),
+    # so `kvmd.inotify` raises "Where is libc?" and every daemon importing it
+    # (kvmd, kvmd-media, kvmd-otg) dies. Point it straight at glibc.
+    substituteInPlace kvmd/libc.py \
+      --replace-fail 'ctypes.util.find_library("c")' '"${lib.getLib stdenv.cc.libc}/lib/libc.so.6"'
+
+    # kvmd-otg parses args twice: init() consumes --main-config, then its own
+    # subcommand parser re-adds it (parents=[ia.parser]) and re-validates the
+    # baked DEFAULT (whose value it then discards). The Arch default
+    # /usr/lib/kvmd/main.yaml doesn't exist on NixOS, so that second validation
+    # fails. Point the default at the runtime path the module materialises.
+    substituteInPlace kvmd/apps/__init__.py \
+      --replace-fail '"/usr/lib/kvmd/main.yaml"' '"/run/kvmd/main.yaml"'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

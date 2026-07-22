@@ -14,6 +14,10 @@
 }:
 let
   cfg = config.services.pikvm.otg;
+  kvmdCfg = config.services.pikvm.kvmd;
+  # For platform=auto the selected profile is written to /run/kvmd by the
+  # detector; kvmd-otg reads the same config, so it must wait for that.
+  kvmdIsAuto = kvmdCfg.platform == "auto";
 in
 {
   options.services.pikvm.otg = {
@@ -44,14 +48,18 @@ in
     # it. Must run after the function modules are loaded and before kvmd.
     systemd.services.kvmd-otg = {
       description = "PiKVM OTG gadget";
-      after = [ "systemd-modules-load.service" ];
+      after = [ "systemd-modules-load.service" ]
+      ++ lib.optional kvmdIsAuto "kvmd-platform-detect.service";
+      requires = lib.optional kvmdIsAuto "kvmd-platform-detect.service";
       before = [ "kvmd.service" ];
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStart = "${cfg.package}/bin/kvmd-otg start";
-        ExecStop = "${cfg.package}/bin/kvmd-otg stop";
+        # Pass the same main/override config as kvmd; without it kvmd-otg falls
+        # back to its baked Arch default (/usr/lib/kvmd/main.yaml) and fails.
+        ExecStart = "${cfg.package}/bin/kvmd-otg ${kvmdCfg.commonArgs} start";
+        ExecStop = "${cfg.package}/bin/kvmd-otg ${kvmdCfg.commonArgs} stop";
       };
     };
   };

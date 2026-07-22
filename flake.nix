@@ -74,6 +74,23 @@
         }
       );
 
+      # ---- Checks (NixOS VM tests) ----------------------------------------
+      # Run NATIVELY per host architecture: an x86_64 host boots an x86_64
+      # guest, an aarch64 host an aarch64 guest — no cross-arch emulated VM.
+      # Exercises the service/config/detector logic; the Pi vendor-kernel +
+      # TC358743 capture path still needs real hardware.
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+          kvmd-services = pkgs.testers.runNixOSTest (
+            import ./tests/kvmd-services.nix { inherit self; }
+          );
+        }
+      );
+
       # ---- NixOS modules --------------------------------------------------
       # `pikvm`    — just the services.pikvm.* options + package overlay, to
       #              compose into your own system.

@@ -272,6 +272,19 @@ in
       '';
     };
 
+    commonArgs = lib.mkOption {
+      type = lib.types.str;
+      internal = true;
+      readOnly = true;
+      default = commonArgs;
+      defaultText = lib.literalMD "the computed `--main-config`/`--override-*` arguments";
+      description = ''
+        The main/override config CLI arguments kvmd is launched with. Exposed so
+        sibling services (kvmd-otg) invoke the daemon suite against the same
+        selected platform profile instead of kvmd's baked `/usr/...` defaults.
+      '';
+    };
+
     ipadCompat.enable = lib.mkEnableOption ''
       iPadOS compatibility. Bundles everything from the PiKVM-on-iPad setup
       guide declaratively: patches the absolute-mouse HID to advertise the boot
@@ -305,7 +318,12 @@ in
       "C+ /etc/kvmd/ipmipasswd 0600 kvmd-ipmi kvmd-ipmi - ${configsDefault}/kvmd/ipmipasswd"
       "C+ /etc/kvmd/vncpasswd 0600 kvmd-vnc kvmd-vnc - ${configsDefault}/kvmd/vncpasswd"
       "C+ /etc/kvmd/totp.secret 0600 kvmd kvmd - ${configsDefault}/kvmd/totp.secret"
-    ];
+    ]
+    ++ lib.optional (!isAuto)
+      # A fixed platform has no boot-time detector writing /run/kvmd/main.yaml,
+      # so materialise it here — kvmd's --main-config default now points there
+      # (see pkgs/kvmd) and kvmd-otg re-validates that path.
+      "L+ /run/kvmd/main.yaml - - - - ${mainConfigs}/${cfg.platform}.yaml";
 
     # --- /etc/kvmd (declarative) ------------------------------------------
     environment.etc = {

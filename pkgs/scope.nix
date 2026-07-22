@@ -6,13 +6,15 @@ let
   # kvmd pins Python >=3.14,<3.15; build it and its Python deps against that.
   pythonPackages = pkgs.python314Packages;
   luma-oled = pythonPackages.callPackage ./python/luma-oled { };
+  ustreamer = scope.callPackage ./ustreamer { };
+  # µStreamer's Python memsink module, built from the same source; kvmd does
+  # `import ustreamer` and won't start without it.
+  ustreamer-python = pythonPackages.callPackage ./python/ustreamer { inherit ustreamer; };
 in
 {
-  ustreamer = scope.callPackage ./ustreamer { };
-
-  inherit luma-oled;
+  inherit ustreamer luma-oled ustreamer-python;
   kvmd = pythonPackages.callPackage ./kvmd {
-    inherit luma-oled;
+    inherit luma-oled ustreamer-python;
     # Xlib is `xlib` on 26.05 and `python-xlib` on unstable — accept either so
     # kvmd builds regardless of which nixpkgs the consuming system uses.
     xlib = pythonPackages.xlib or pythonPackages.python-xlib;

@@ -81,9 +81,12 @@
     # really serves its API on the socket, restarted at most once, and that
     # the OTG HID symlinks the udev rules create actually appear (that catches
     # both a crash-looping kvmd and the missing-hid-udev regression).
+    # Hit kvmd's socket DIRECTLY (no nginx here), so use kvmd's root route
+    # /auth/check — there is no /api prefix on kvmd's own routes (that prefix
+    # is only the nginx front-door convention).
     machine.wait_until_succeeds(
         "${pkgs.curl}/bin/curl -s --unix-socket /run/kvmd/kvmd.sock"
-        " http://localhost/api/auth/check -o /dev/null -w '%{http_code}' | grep -qE '401|403'",
+        " http://localhost/auth/check -o /dev/null -w '%{http_code}' | grep -qE '401|403'",
         timeout=90,
     )
     machine.succeed("test $(systemctl show kvmd.service -p NRestarts --value) -le 1")

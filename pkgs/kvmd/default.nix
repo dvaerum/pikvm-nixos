@@ -54,8 +54,10 @@
   gpiod, # libgpiod v2 python bindings
   ustreamer-python, # `import ustreamer` — µStreamer's memsink module (pkgs/python/ustreamer)
 
-  # Native library loaded via ctypes at runtime (keysym translation).
+  # Native libraries loaded via ctypes at runtime: libxkbcommon (keysym
+  # translation, keyboard paste), tesseract (OCR of the captured screen).
   libxkbcommon,
+  tesseract,
 }:
 buildPythonApplication rec {
   pname = "kvmd";
@@ -162,6 +164,16 @@ buildPythonApplication rec {
     # fails. Point the default at the runtime path the module materialises.
     substituteInPlace kvmd/apps/__init__.py \
       --replace-fail '"/usr/lib/kvmd/main.yaml"' '"/run/kvmd/main.yaml"'
+
+    # Same find_library("...") -> None problem as libc above, for the two
+    # feature-path native libs kvmd dlopens: libxkbcommon (keyboard paste /
+    # keysym translation) and libtesseract (screen OCR). Unlike libc these are
+    # imported lazily so they don't break boot, but the feature dies at runtime
+    # on the appliance. Point both straight at the store lib.
+    substituteInPlace kvmd/keyboard/printer.py \
+      --replace-fail 'ctypes.util.find_library("xkbcommon")' '"${lib.getLib libxkbcommon}/lib/libxkbcommon.so.0"'
+    substituteInPlace kvmd/apps/kvmd/ocr.py \
+      --replace-fail 'ctypes.util.find_library("tesseract")' '"${lib.getLib tesseract}/lib/libtesseract.so.5"'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

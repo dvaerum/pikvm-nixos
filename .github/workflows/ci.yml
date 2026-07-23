@@ -75,3 +75,7 @@ jobs:
       # Unified-auth end-to-end (kvmd + nginx front-door + mcp security=kvmd).
       - name: Run the mcp-proxy VM test
         run: nix build --print-build-logs .#checks.x86_64-linux.mcp-proxy
+      # HID recovery: real UDC re-enumeration + polkit least-privilege +
+      # the authenticated loopback endpoint → systemctl path.
+      - name: Run the hid-recovery VM test
+        run: nix build --print-build-logs .#checks.x86_64-linux.hid-recovery

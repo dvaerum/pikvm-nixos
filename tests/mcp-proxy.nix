@@ -35,6 +35,15 @@ let
     services.pikvm.otg.enable = true;
     boot.kernelModules = [ "dummy_hcd" ];
 
+    # kvmd's on_startup crash-loops in a generic VM without these: msd.type=otg
+    # writes the Pi vendor configfs attr inquiry_string_cdrom (EACCES), and
+    # atx.type=gpio opens /dev/gpiochip0 (absent → FileNotFoundError). The
+    # appliance keeps both — this is a VM-hardware accommodation only.
+    services.pikvm.kvmd.settings.kvmd = {
+      msd.type = "disabled";
+      atx.type = "disabled";
+    };
+
     services.pikvm.mcpProxy.enable = true; # 443 front-door: kvmd /api + /mcp
 
     services.pikvm-mcp = {

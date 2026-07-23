@@ -32,6 +32,15 @@
       # No self-updates inside the test VM.
       services.pikvm.autoUpgrade.enable = false;
 
+      # Disable the two subsystems that need Pi hardware the generic VM kernel
+      # lacks, or kvmd's on_startup crash-loops: msd.type=otg writes the vendor
+      # configfs attr inquiry_string_cdrom (EACCES here), atx.type=gpio opens
+      # /dev/gpiochip0 (absent → FileNotFoundError). The appliance keeps both.
+      services.pikvm.kvmd.settings.kvmd = {
+        msd.type = "disabled";
+        atx.type = "disabled";
+      };
+
       # dummy_hcd provides a virtual USB Device Controller so the OTG gadget
       # can actually bind in the VM (there's no real dwc2 UDC here). Test-only.
       boot.kernelModules = [ "dummy_hcd" ];
@@ -65,6 +74,21 @@
     # module and load libc. They order after network-online, so wait for them.)
     machine.wait_for_unit("kvmd.service")
     machine.wait_for_unit("kvmd-media.service")
+
+    # --- kvmd must actually SERVE (not just exec) ------------------------
+    # wait_for_unit on a Type=simple unit returns the instant kvmd execs —
+    # BEFORE its Python on_startup runs (which can crash). So assert kvmd
+    # really serves its API on the socket, restarted at most once, and that
+    # the OTG HID symlinks the udev rules create actually appear (that catches
+    # both a crash-looping kvmd and the missing-hid-udev regression).
+    machine.wait_until_succeeds(
+        "${pkgs.curl}/bin/curl -s --unix-socket /run/kvmd/kvmd.sock"
+        " http://localhost/api/auth/check -o /dev/null -w '%{http_code}' | grep -qE '401|403'",
+        timeout=90,
+    )
+    machine.succeed("test $(systemctl show kvmd.service -p NRestarts --value) -le 1")
+    machine.wait_for_unit("kvmd-otg.service")
+    machine.wait_until_succeeds("test -e /dev/kvmd-hid-keyboard", timeout=15)
 
     # --- kvmd-otg: the port bugs must be gone ----------------------------
     # kvmd-otg now parses --main-config correctly (not the Arch

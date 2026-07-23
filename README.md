@@ -98,6 +98,9 @@ Pin and bump the base on your own schedule with `nix flake update pikvm-nixos`.
 - **[docs/customizing.md](docs/customizing.md)** — the full guide: layering a
   downstream flake vs. forking, every option, how the weekly update chain
   works, and pinning a platform. Start here to make your own modified version.
+- **[docs/hardware-validation.md](docs/hardware-validation.md)** — flash a Pi 4
+  and run the checklist: the boot/device-tree, TC358743 capture, and USB-OTG
+  layers a VM can't cover, plus exactly what to capture and send back.
 
 ## License
 

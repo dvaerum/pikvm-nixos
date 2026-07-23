@@ -154,9 +154,12 @@ in
         sslCertificateKey = keyFile;
 
         # kvmd HTTP API (auth, control, snapshot). kvmd enforces its own auth
-        # here — nginx just TLS-terminates + proxies to the socket. No URI on
-        # proxyPass ⇒ the original /api/... path is passed through unchanged.
-        locations."/api/".proxyPass = "http://pikvm-kvmd";
+        # here — nginx just TLS-terminates + proxies to the socket. kvmd serves
+        # its routes at the socket ROOT (/auth/check, /hid, …) with NO /api
+        # prefix; the /api/ is a front-door convention we must STRIP. The
+        # trailing slash on proxyPass makes nginx replace the matched "/api/"
+        # with "/", so /api/auth/check → kvmd's /auth/check (else kvmd 404s).
+        locations."/api/".proxyPass = "http://pikvm-kvmd/";
 
         locations.${cfg.location} = {
           proxyPass = "http://${cfg.upstream.address}:${toString cfg.upstream.port}";

@@ -346,6 +346,14 @@ in
       SUBSYSTEM=="video4linux", ATTR{name}=="tc358743", SYMLINK+="kvmd-video"
       SUBSYSTEM=="video4linux", ATTRS{idVendor}=="534d", ATTRS{idProduct}=="2109", ATTR{index}=="0", SYMLINK+="kvmd-video"
       SUBSYSTEM=="video4linux", ENV{ID_V4L_CAPABILITIES}==":capture:", ENV{ID_USB_INTERFACES}=="*:0e02*", ATTR{index}=="0", SYMLINK+="kvmd-video"
+
+      # OTG HID gadget devices → the names kvmd's HID plugin opens. Ships in
+      # upstream's v2-hdmiusb-rpi4.rules; without these the OTG keyboard/mouse
+      # silently don't work on a real Pi 4 (the gadget binds /dev/hidgN but
+      # kvmd looks for /dev/kvmd-hid-*).
+      KERNEL=="hidg0", GROUP="kvmd", SYMLINK+="kvmd-hid-keyboard"
+      KERNEL=="hidg1", GROUP="kvmd", SYMLINK+="kvmd-hid-mouse"
+      KERNEL=="hidg2", GROUP="kvmd", SYMLINK+="kvmd-hid-mouse-alt"
     '';
 
     # --- Platform detection (auto only) -----------------------------------

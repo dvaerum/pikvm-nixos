@@ -51,10 +51,16 @@ jobs:
         run: nix build --print-build-logs .#packages.x86_64-linux.pikvm-mcp-server
 
   vm-test:
-    name: NixOS VM test (kvmd-services)
+    name: NixOS VM tests (kvmd-services + mcp-proxy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The mcp-proxy check is a 2-node VM that also builds the MCP server
+      # (onnxruntime/sharp) — reclaim runner disk so it fits.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
       # runNixOSTest boots a real VM under QEMU/KVM. GitHub's Linux runners
       # expose /dev/kvm, so the x86_64-linux check runs natively (no emulation).
       - name: Enable KVM
@@ -66,3 +72,6 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - name: Run the kvmd-services VM test
         run: nix build --print-build-logs .#checks.x86_64-linux.kvmd-services
+      # Unified-auth end-to-end (kvmd + nginx front-door + mcp security=kvmd).
+      - name: Run the mcp-proxy VM test
+        run: nix build --print-build-logs .#checks.x86_64-linux.mcp-proxy

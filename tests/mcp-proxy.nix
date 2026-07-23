@@ -208,10 +208,14 @@ in
     # store. Prove the rendered nginx config references /run (and NOT the store)
     # for the key, that the file is owned by nginx (readable), and that nginx
     # started only after the secret was materialized.
-    off.succeed(
-        "grep -qE 'ssl_certificate_key +/run/pikvm-byo-tls/key.pem;' /etc/nginx/nginx.conf"
-    )
-    off.fail("grep -qE 'ssl_certificate_key +/nix/store' /etc/nginx/nginx.conf")
+    # nginx's effective config lives in the store (started as
+    # `nginx -c /nix/store/…-nginx.conf`), not /etc — resolve it from the unit.
+    nginx_conf = off.succeed(
+        "systemctl show -p ExecStart --value nginx "
+        "| grep -oE '/nix/store/[^ ]+-nginx\\.conf' | head -n1"
+    ).strip()
+    off.succeed(f"grep -qE 'ssl_certificate_key +/run/pikvm-byo-tls/key.pem;' {nginx_conf}")
+    off.fail(f"grep -qE 'ssl_certificate_key +/nix/store' {nginx_conf}")
     off.succeed("test \"$(stat -c '%U' /run/pikvm-byo-tls/key.pem)\" = nginx")
     off.succeed("systemctl is-active pikvm-byo-key.service")
 

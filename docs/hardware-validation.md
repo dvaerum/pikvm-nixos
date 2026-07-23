@@ -95,37 +95,78 @@ Feed HDMI into the capture input and confirm ustreamer sees a signal
 `dtoverlay=tc358743` wiring or CMA sizing needs tuning (see
 `hosts/configtxt-pikvm.nix`, `hosts/rpi4.nix`).
 
-## 6. USB-OTG to a target machine — ⚠ real-hardware gap
+## 6. USB-OTG + HID to a target machine — ⚠ real-hardware gap
 
 Plug the Pi's USB-C/OTG port into a target PC. With `kvmd-otg` active the
-target should enumerate an emulated **keyboard + mouse + mass-storage** device:
+target should enumerate an emulated **keyboard + mouse + mass-storage** device.
+
+**HID device nodes** — the on-device proof of the `hidg*` → `/dev/kvmd-hid-*`
+udev fix (PR #6). A VM can't check this, and without it OTG keyboard/mouse
+*silently* don't work:
 
 ```sh
 # on the Pi:
-ls /sys/kernel/config/usb_gadget/kvmd/           # the assembled gadget
-# on the target: it appears as a new USB HID + USB drive
+ls /sys/kernel/config/usb_gadget/kvmd/                     # the assembled gadget
+ls -l /dev/kvmd-hid-keyboard /dev/kvmd-hid-mouse /dev/kvmd-hid-mouse-alt
+#   ⚠ these MUST exist (udev symlinks to /dev/hidgN). If MISSING → the udev
+#   rules regressed; report it. (`ls -l` shows they point at hidg0/1/2.)
 ```
 
-Type via the web UI / API and confirm keystrokes land on the target.
+**Functional verify — the real test.** It is not enough that `kvmd-otg` is
+`active` and the nodes exist; confirm input actually *lands on the target*:
 
-## 7. MCP server (only if enabled)
+- On the **target**, open a text field (a terminal / editor) and focus it.
+- From the PiKVM **web UI** (§7) or the API, type some keys and move the mouse.
+- Watch the target: the characters should appear and the cursor should move.
 
-Off by default. If `services.pikvm-mcp.enable = true`:
+No motion/keystrokes on the target despite `/dev/kvmd-hid-*` existing ⇒ a
+gadget/HID-report issue to capture; missing nodes ⇒ the udev regression above.
+
+## 7. nginx front-door + `/mcp` endpoint
+
+The 443 nginx front-door landed (PR #6): it TLS-terminates (self-signed by
+default) and reverse-proxies kvmd's API at `/api/` and — if enabled — the MCP
+server at `/mcp`.
 
 ```sh
-curl -sf http://127.0.0.1:3000/health            # secured:true
-systemctl status pikvm-mcp --no-pager            # active, no onnxruntime dlopen error
+systemctl status nginx --no-pager                        # active
+curl -sk https://localhost/api/auth/check                # 401 → kvmd reachable through the front-door
 ```
 
-(The booted-service + auth path is already VM-verified via
-`checks.x86_64-linux.nixos-service` in the MCP repo.)
+**MCP `/mcp` smoke** — only if `services.pikvm-mcp.enable = true` **and**
+`services.pikvm.mcpProxy.enable = true` (unified auth, `security = "kvmd"`):
 
-> Note: the browser web UI is fronted by nginx, which is a **separate module
-> still being wired in** (`mcp-nginx-proxy`, in progress). Until it lands, kvmd
-> serves its API on the local socket; verify via the service status / API
-> rather than `https://<pi>/` in a browser.
+```sh
+systemctl status pikvm-mcp --no-pager                    # active, no onnxruntime dlopen error
 
-## 8. What to send back
+# Log in with your REAL PiKVM credentials (curl -k for the self-signed cert):
+curl -sk -u <pikvm-user>:<pass> \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -X POST https://localhost/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' -i | head
+# → HTTP 200 + an `Mcp-Session-Id` header. No creds or WRONG creds → 401.
+```
+
+Same login as the PiKVM web UI (that's the point of unified auth). Full guide:
+[mcp-endpoint.md](mcp-endpoint.md).
+
+## 8. HID recovery (optional)
+
+If the OTG HID ever stops registering on the target, the MCP server exposes a
+`pikvm_hid_recover` tool (and, once the host helper is wired, an authenticated
+loopback endpoint) that walks a recovery ladder — `soft_connect` (~6 s, the
+proven fix) → `udc-rebind` → `reboot`. Rungs 2–3 are still **untested on real
+hardware**: if you hit an HID drop, run the recovery and note **which rung**
+restored input. Contract + ladder:
+[pikvm_mcp_server hid-recovery runbook](https://github.com/dvaerum/pikvm_mcp_server/blob/main/docs/runbooks/hid-recovery.md).
+
+## 9. Desktop target tuning (optional)
+
+If you cable a **non-iPad HDMI** target in and want to measure/tune click
+accuracy, run the MCP server's `benches/desktop-e2e.ts` (auto-calibrate →
+absolute move/click → screenshot-verify); see its `desktop-workflow` skill.
+
+## 10. What to send back
 
 Bundle and return:
 

@@ -1,10 +1,11 @@
 name: Update flake inputs
 
-# Weekly: bump the tracked flake inputs — nixpkgs (the base) AND pikvm-mcp-server
-# (the /mcp endpoint) — build + VM-test to prove they still work, and only then
-# commit the new flake.lock STRAIGHT TO main. Deployed devices self-update from
-# main weekly, so a verified bump here rolls out to every KVM on its next cycle,
-# and a bump that fails is never committed.
+# Weekly: bump ALL flake inputs (bare `nix flake update` — nixpkgs,
+# nixos-raspberrypi, disko, pikvm-mcp-server, and any future input), build +
+# VM-test to prove they still work, and only then commit the new flake.lock
+# STRAIGHT TO main. Deployed devices self-update from main weekly, so a verified
+# bump here rolls out to every KVM on its next cycle, and a bump that fails is
+# never committed.
 #
 # Why straight-to-main is safe even for the auth/behaviour-affecting MCP input:
 # the gate below runs the full NixOS VM suite (incl. mcp-proxy, which exercises
@@ -47,8 +48,48 @@ jobs:
             extra-substituters = https://nixos-raspberrypi.cachix.org
             extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
 
-      - name: Bump the tracked inputs (nixpkgs + the MCP /mcp endpoint)
-        run: nix flake update nixpkgs pikvm-mcp-server
+      # Auto-advance nixpkgs across NixOS STABLE releases (26.05 → 26.11 → …).
+      # `nix flake update` only follows the latest commit on whatever branch the
+      # URL names, so it never jumps releases on its own. Here we find the newest
+      # existing stable branch (nixos-YY.05 / nixos-YY.11) on NixOS/nixpkgs and,
+      # if it's newer than the pinned ref, rewrite flake.nix so the relock below
+      # moves onto it. A release jump is potentially breaking — that's fine: the
+      # VM gate validates it before the commit, so a jump that breaks the
+      # appliance fails the gate and never ships (a real "needs migration"
+      # signal). Only STABLE releases (never nixos-unstable / -small / staging).
+      - name: Advance nixpkgs to the newest stable NixOS release (if any)
+        run: |
+          set -euo pipefail
+          current=$(grep -oE 'github:NixOS/nixpkgs/nixos-[0-9]{2}\.[0-9]{2}' flake.nix \
+            | grep -oE 'nixos-[0-9]{2}\.[0-9]{2}' | head -1)
+          newest=$(git ls-remote --heads https://github.com/NixOS/nixpkgs 'nixos-*' \
+            | sed 's#.*refs/heads/##' \
+            | grep -E '^nixos-[0-9]{2}\.(05|11)$' \
+            | sort -V | tail -1)
+          echo "pinned=$current  newest-stable=$newest"
+          if [ -z "$newest" ]; then
+            echo "::warning::could not list nixpkgs release branches; keeping $current"
+          elif [ "$newest" != "$current" ] \
+            && [ "$(printf '%s\n%s\n' "$current" "$newest" | sort -V | tail -1)" = "$newest" ]; then
+            echo "::notice::NixOS release advancing $current -> $newest"
+            sed -i -E "s#(github:NixOS/nixpkgs/)nixos-[0-9]{2}\.[0-9]{2}#\1$newest#" flake.nix
+            echo "RELEASE_ADVANCE=$current -> $newest" >> "$GITHUB_ENV"
+          else
+            echo "already on the newest stable release ($current); no advance"
+          fi
+
+      # Bump ALL inputs (bare `nix flake update`) — no list to maintain, and any
+      # future input is auto-covered. This includes disko: its
+      # `github:nix-community/disko?ref=pull/1190/merge` pin is GitHub's FLOATING
+      # auto-merge ref, so relocking re-merges PR #1190 against the latest
+      # upstream disko base — keeping disko current AND re-incorporating the
+      # cross-compile disk-format patch every bump, as long as the PR stays open.
+      # (nixos-raspberrypi breakage is caught by the rpi4/zero2w toplevel build
+      # below. disko is NOT gate-covered — see the note at its flake.nix input —
+      # but a disko break only surfaces at SD-flash/image-build time, never on a
+      # deployed device's auto-update, so blast radius is low.)
+      - name: Bump all flake inputs
+        run: nix flake update
 
       - name: Show lock diff
         run: git --no-pager diff -- flake.lock || true
@@ -82,14 +123,21 @@ jobs:
             .#checks.x86_64-linux.mcp-proxy \
             .#checks.x86_64-linux.hid-recovery
 
+      # Stage flake.nix too: the release-advance step above rewrites the nixpkgs
+      # ref there when it jumps to a new stable release, and that rewrite must
+      # ride along with the relock.
       - name: Commit the verified bump
         run: |
-          if git diff --quiet -- flake.lock; then
-            echo "flake.lock unchanged; nothing to commit."
+          if git diff --quiet -- flake.lock flake.nix; then
+            echo "flake.lock/flake.nix unchanged; nothing to commit."
             exit 0
           fi
           git config user.name "pikvm-nixos-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add flake.lock
-          git commit -m "ci: weekly flake input bump — nixpkgs + pikvm-mcp-server (VM-verified)"
+          git add flake.lock flake.nix
+          if [ -n "${RELEASE_ADVANCE:-}" ]; then
+            git commit -m "ci: NixOS release advanced ${RELEASE_ADVANCE} + weekly input bump (VM-verified)"
+          else
+            git commit -m "ci: weekly flake input bump — all inputs except the disko pin (VM-verified)"
+          fi
           git push

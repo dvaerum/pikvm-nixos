@@ -18,6 +18,16 @@
 let
   # A full front-door node, parameterised only by whether the in-band login
   # tool is enabled. Both nodes share kvmd + nginx + mcp(security=kvmd).
+  # A throwaway self-signed CA/server cert for localhost, built at eval time
+  # (test-only — a real deployment points certificateKey at a sops/agenix
+  # secret). Used on the `off` node to prove the bring-your-own-cert path;
+  # `machine` stays on the self-signed-at-first-boot default.
+  testCert = pkgs.runCommand "pikvm-mcpproxy-testcert" { nativeBuildInputs = [ pkgs.openssl ]; } ''
+    mkdir -p $out
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout $out/key.pem -out $out/cert.pem \
+      -days 3650 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+  '';
+
   mkNode = allowToolLogin: {
     imports = [
       ../modules/kvmd.nix
@@ -63,8 +73,13 @@ in
 {
   name = "pikvm-mcp-proxy";
 
-  nodes.machine = mkNode true; # header + tool-login
-  nodes.off = mkNode false; # header only (OFF-parity)
+  nodes.machine = mkNode true; # header + tool-login; self-signed cert (default)
+  nodes.off = {
+    # header only (OFF-parity) + a bring-your-own TLS cert (BYO-cert path).
+    imports = [ (mkNode false) ];
+    services.pikvm.mcpProxy.tls.certificate = "${testCert}/cert.pem";
+    services.pikvm.mcpProxy.tls.certificateKey = "${testCert}/key.pem";
+  };
 
   testScript = ''
     import json
@@ -142,6 +157,17 @@ in
 
     setup(machine)
     setup(off)
+
+    # === TLS: bring-your-own cert vs self-signed default ====================
+    # `off` supplied tls.certificate/certificateKey → nginx serves OUR cert
+    # (curl validates the chain against our CA, no -k) and the self-signed
+    # generator must NOT have run. `machine` supplied none → it self-signs.
+    off.succeed(
+        "${pkgs.curl}/bin/curl --cacert ${testCert}/cert.pem -o /dev/null -w '%{http_code}'"
+        " https://localhost/api/auth/check | grep -qE '401|403'"
+    )
+    off.fail("systemctl is-active pikvm-nginx-selfsigned.service")
+    machine.succeed("systemctl is-active pikvm-nginx-selfsigned.service")
 
     # === HEADER auth (strict, per MCP PR #18 / Option A): present header ====
     # A PRESENT Basic header is ALWAYS validated against kvmd — wrong → 401,

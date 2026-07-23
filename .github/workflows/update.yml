@@ -1,10 +1,20 @@
 name: Update flake inputs
 
-# Weekly: bump the nixpkgs lock, build to prove it still works, and only then
-# commit the new flake.lock to main. Because deployed devices self-update from
-# this repo weekly, a build-verified lock bump here rolls out to every KVM on
-# its next cycle — the base stays current without manual work, and a bump that
-# doesn't build is never committed.
+# Weekly: bump the tracked flake inputs — nixpkgs (the base) AND pikvm-mcp-server
+# (the /mcp endpoint) — build + VM-test to prove they still work, and only then
+# commit the new flake.lock STRAIGHT TO main. Deployed devices self-update from
+# main weekly, so a verified bump here rolls out to every KVM on its next cycle,
+# and a bump that fails is never committed.
+#
+# Why straight-to-main is safe even for the auth/behaviour-affecting MCP input:
+# the gate below runs the full NixOS VM suite (incl. mcp-proxy, which exercises
+# the /mcp unified-auth flow end-to-end) INLINE in this job, before the commit —
+# so a broken MCP or nixpkgs bump fails the gate and never pushes. That inline
+# gate is what a separate PR + required-checks would buy, without the
+# cross-workflow PR-trigger + FLAKE_UPDATE_TOKEN machinery. nixpkgs and
+# pikvm-mcp-server are bumped together: if the gate fails, NEITHER ships — we
+# don't commit a lock we couldn't verify. (disko is intentionally PR-pinned and
+# nixos-raspberrypi is left alone here; only the two tracked inputs auto-bump.)
 on:
   schedule:
     - cron: "23 3 * * 1" # Mondays 03:23 UTC
@@ -37,8 +47,8 @@ jobs:
             extra-substituters = https://nixos-raspberrypi.cachix.org
             extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
 
-      - name: Bump nixpkgs
-        run: nix flake update nixpkgs
+      - name: Bump the tracked inputs (nixpkgs + the MCP /mcp endpoint)
+        run: nix flake update nixpkgs pikvm-mcp-server
 
       - name: Show lock diff
         run: git --no-pager diff -- flake.lock || true
@@ -52,12 +62,13 @@ jobs:
             .#nixosConfigurations.rpi4.config.system.build.toplevel \
             .#nixosConfigurations.zero2w.config.system.build.toplevel
 
-      # This bump is pushed STRAIGHT TO main and every deployed KVM self-updates
-      # from main weekly — so a nixpkgs bump that builds but breaks a service at
-      # runtime would silently ship to every device. Gate on the same VM suite
-      # CI runs on PRs (kvmd actually serves, OTG HID + polkit recovery, unified
-      # auth through the nginx front-door) so a runtime regression blocks the
-      # commit instead of reaching devices. runNixOSTest needs /dev/kvm.
+      # These bumps are pushed STRAIGHT TO main and every deployed KVM
+      # self-updates from main weekly — so a bump (nixpkgs OR pikvm-mcp-server)
+      # that builds but breaks a service at runtime would silently ship to every
+      # device. Gate on the same VM suite CI runs on PRs (kvmd actually serves,
+      # OTG HID + polkit recovery, and the unified-auth /mcp flow through the
+      # nginx front-door) so a runtime regression blocks the commit instead of
+      # reaching devices. runNixOSTest needs /dev/kvm.
       - name: Enable KVM (for the VM suite)
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -80,5 +91,5 @@ jobs:
           git config user.name "pikvm-nixos-bot"
           git config user.email "actions@users.noreply.github.com"
           git add flake.lock
-          git commit -m "ci: weekly nixpkgs bump (build verified)"
+          git commit -m "ci: weekly flake input bump — nixpkgs + pikvm-mcp-server (VM-verified)"
           git push

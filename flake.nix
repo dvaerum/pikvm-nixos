@@ -88,6 +88,9 @@
           mcp-proxy = pkgs.testers.runNixOSTest (
             import ./tests/mcp-proxy.nix { inherit self pkgs; }
           );
+          hid-recovery = pkgs.testers.runNixOSTest (
+            import ./tests/hid-recovery.nix { inherit self pkgs; }
+          );
         }
       );
 

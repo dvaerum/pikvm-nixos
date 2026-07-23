@@ -8,6 +8,7 @@
     ./otg.nix
     ./kvmd.nix
     ./nginx.nix
+    ./hid-recovery.nix
   ];
 
   # Make the PiKVM package scope (`pkgs.pikvm.*`) available to every module

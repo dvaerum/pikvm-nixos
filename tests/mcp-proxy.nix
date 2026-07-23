@@ -143,21 +143,22 @@ in
     setup(machine)
     setup(off)
 
-    # === HEADER auth: the valid PiKVM login authorizes on BOTH nodes ========
-    # Header auth is independent of allowToolLogin. The no-creds/wrong-creds
-    # OUTCOME differs by node (see below), so only the valid case is asserted
-    # for both here.
+    # === HEADER auth on BOTH nodes: wrong creds → 401, valid login → 200 ====
+    # A present Basic header is validated against kvmd regardless of
+    # allowToolLogin — so wrong→401 and valid→200 hold on both nodes. Only the
+    # NO-header outcome is node-specific (see below).
     for node in (machine, off):
+        code, _, _ = mcp_init(node, "alice:wrongpw")
+        assert code == "401", f"wrong PiKVM creds must be rejected, got {code}"
         code, hdrs, _ = mcp_init(node, "alice:secretpw")
-        assert code == "200", f"valid PiKVM header login must authorize /mcp, got {code}"
+        assert code == "200", f"valid PiKVM login must authorize /mcp, got {code}"
         assert session_id(hdrs), "authorized initialize must return a session id"
 
-    # === OFF node (allowToolLogin=false): no header / wrong creds → 401 ======
-    # Without the tool-login toggle, an unauthenticated initialize is rejected.
+    # === NO-header outcome is node-specific =================================
+    # allowToolLogin=false → a header-less initialize is rejected (401). The
+    # machine node's header-less → 200 pre-auth is asserted as path (b) below.
     code, _, _ = mcp_init(off)
     assert code == "401", f"no-creds must be 401 when allowToolLogin is off, got {code}"
-    code, _, _ = mcp_init(off, "alice:wrongpw")
-    assert code == "401", f"wrong PiKVM creds must be 401, got {code}"
 
     # === TOOL-LOGIN path (b) — machine (allowToolLogin=true), header-less ====
     # Payload shapes confirmed against e8e9547 by @nixos-developer-system:

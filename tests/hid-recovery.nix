@@ -22,6 +22,11 @@
         ../modules/kvmd.nix
         ../modules/otg.nix
         ../modules/hid-recovery.nix
+        ../modules/hid-recovery-endpoint.nix
+        # Declares services.pikvm-mcp so the endpoint's MCP-wiring definition
+        # resolves. Left DISABLED (default) — the endpoint runs standalone here;
+        # we test the loopback → systemctl path, not the MCP round-trip.
+        self.nixosModules.mcp-server
       ];
 
       services.pikvm.kvmd.enable = true;
@@ -36,15 +41,10 @@
       };
       boot.kernelModules = [ "dummy_hcd" ];
 
-      services.pikvm.hidRecovery.enable = true;
-
-      # Stand-in for the recovery endpoint's user (the endpoint module creates it
-      # for real). Its only purpose here is to be the polkit subject.
-      users.groups.pikvm-hid-recovery = { };
-      users.users.pikvm-hid-recovery = {
-        isSystemUser = true;
-        group = "pikvm-hid-recovery";
-      };
+      # The endpoint module pulls in services.pikvm.hidRecovery.enable AND
+      # creates the pikvm-hid-recovery user + the loopback endpoint + token for
+      # real — so we exercise the full endpoint → systemctl path, not a stub.
+      services.pikvm.hidRecovery.endpoint.enable = true;
 
       virtualisation.memorySize = 2048;
       virtualisation.diskSize = 4096;
@@ -87,6 +87,34 @@
     # ...and nothing else (an arbitrary unit is denied by polkit, non-interactive).
     machine.fail(
         "runuser -u pikvm-hid-recovery -- systemctl start systemd-tmpfiles-clean.service"
+    )
+
+    # --- endpoint: authenticated loopback → systemctl start -------------
+    # The pikvm-hid-recovery endpoint (running as that user) Bearer-authenticates
+    # the MCP contract and starts the recovery unit — the full end-to-end path.
+    machine.wait_for_unit("pikvm-hid-recovery-endpoint.service")
+    token = machine.succeed("cat /run/pikvm-hid-recovery/token").strip()
+
+    def post(auth, body):
+        cmd = (
+            "curl -s -o /dev/null -w '%{http_code}' "
+            + auth
+            + " -H 'Content-Type: application/json' -X POST"
+            + " http://127.0.0.1:8082/hid-recovery -d '" + body + "'"
+        )
+        return machine.succeed(cmd).strip()
+
+    bearer = "-H 'Authorization: Bearer " + token + "'"
+    # no token / wrong token → 401
+    assert post("", '{"action": "soft_connect"}') == "401", "missing token must be 401"
+    assert post("-H 'Authorization: Bearer wrong'", '{"action": "soft_connect"}') == "401", \
+        "wrong token must be 401"
+    # unknown action → 400 (validated before any systemctl)
+    assert post(bearer, '{"action": "nope"}') == "400", "unknown action must be 400"
+    # valid token + real action → 200, and the recovery actually ran (UDC configured)
+    assert post(bearer, '{"action": "soft_connect"}') == "200", "authenticated trigger must be 200"
+    machine.wait_until_succeeds(
+        f"test \"$(cat /sys/class/udc/{udc}/state)\" = configured", timeout=30
     )
   '';
 }

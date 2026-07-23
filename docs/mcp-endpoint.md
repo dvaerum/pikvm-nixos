@@ -68,18 +68,71 @@ By default the front-door generates a **self-signed** certificate at first boot
 (PiKVM is a LAN appliance with no public domain), so clients skip certificate
 verification — see the client doc above for how.
 
-To serve your **own** certificate (so verification works normally), set:
+To serve your **own** certificate (so verification works normally), point the
+proxy at your cert and key:
 
 ```nix
 services.pikvm.mcpProxy.tls = {
-  certificate = "/etc/ssl/pikvm/fullchain.pem";
-  certificateKey = config.sops.secrets."pikvm/tls-key".path;  # a runtime secret
+  certificate    = "/etc/ssl/pikvm/fullchain.pem";           # public — a plain path is fine
+  certificateKey = config.sops.secrets."pikvm/tls-key".path; # a RUNTIME secret path
 };
 ```
 
-Both mirror nginx's own `sslCertificate`/`sslCertificateKey`. The key must be a
-runtime secret path (sops-nix / agenix) — never an inline string in the Nix
-store. If both are set, nginx uses them; otherwise it self-signs.
+Both mirror nginx's own `sslCertificate` / `sslCertificateKey`, and pikvm-nixos
+passes them to nginx **verbatim** — the private key is never read into or copied
+through the Nix store. When both are set nginx uses them; otherwise it self-signs.
+
+### The private key must be a runtime secret path
+
+`certificateKey` must be a **string path that exists at runtime** — the file a
+secret manager decrypts on the box — not a Nix path literal:
+
+- ✅ `config.sops.secrets."pikvm/tls-key".path` → `"/run/secrets/pikvm/tls-key"`
+- ✅ `config.age.secrets."pikvm-tls-key".path` → `"/run/agenix/pikvm-tls-key"`
+- ✅ any `"/var/lib/…"` / `"/run/…"` string you provision yourself
+- ❌ `./tls-key.pem` (a Nix path literal) — this **copies the key into the
+  world-readable `/nix/store`**. Never do this for a private key.
+
+nginx runs as the `nginx` user, so the key must be **readable by `nginx`**, and
+the front-door must not start before the secret is materialized. Both secret
+managers below decrypt during system **activation**, before any service starts,
+so nginx is already ordered after them — no extra wiring needed. (If you run
+sops-nix in its systemd mode instead, add `systemd.services.nginx.after` on the
+`sops-install-secrets` unit.)
+
+#### sops-nix
+
+```nix
+sops.secrets."pikvm/tls-key" = {
+  sopsFile = ./secrets/pikvm.yaml;
+  owner = "nginx";      # nginx must read it
+  mode  = "0400";
+};
+
+services.pikvm.mcpProxy.tls = {
+  certificate    = "/etc/ssl/pikvm/fullchain.pem";
+  certificateKey = config.sops.secrets."pikvm/tls-key".path;
+};
+```
+
+#### agenix
+
+```nix
+age.secrets."pikvm-tls-key" = {
+  file  = ./secrets/pikvm-tls-key.age;
+  owner = "nginx";      # nginx must read it
+  mode  = "0400";
+};
+
+services.pikvm.mcpProxy.tls = {
+  certificate    = "/etc/ssl/pikvm/fullchain.pem";
+  certificateKey = config.age.secrets."pikvm-tls-key".path;
+};
+```
+
+> The same runtime-secret rule applies to every key the appliance takes —
+> `services.pikvm-mcp.passwordFile`, `services.pikvm.hidRecovery.endpoint.tokenFile`,
+> etc. Point them at sops/agenix secret paths, never inline strings in the store.
 
 > ACME / Let's Encrypt is not wired up (a LAN appliance usually has no public
 > domain), but it's a natural future option if your PiKVM is reachable at a

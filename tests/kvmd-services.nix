@@ -13,7 +13,7 @@
 # nixpkgs read-only, so a node may not set overlays. The pikvm.* packages the
 # modules need are already present because flake.nix calls runNixOSTest on a
 # pkgs set that carries the overlay, and nodes inherit it as their hostPkgs.
-{ self }:
+{ self, pkgs }:
 {
   name = "pikvm-kvmd-services";
 
@@ -78,5 +78,26 @@
         "regression: kvmd-otg fell back to the /usr/lib/kvmd/main.yaml default"
     assert "Where is libc" not in otg_log, \
         "regression: kvmd.libc could not load libc"
+
+    # --- lazily-dlopened native libs must resolve ------------------------
+    # Regression guard for the find_library(...)->None fixes. On a stock
+    # appliance find_library returns None (no ld.so.cache), so keyboard-paste
+    # (libxkbcommon) and OCR (libtesseract) die at runtime even though boot is
+    # fine. Assert kvmd's installed loaders now reference the store sonames
+    # instead of find_library, AND that those exact libs actually dlopen.
+    kvmd = "${pkgs.pikvm.kvmd}"
+    machine.succeed(
+        f"grep -q 'libxkbcommon.so.0' {kvmd}/lib/python*/site-packages/kvmd/keyboard/printer.py"
+    )
+    machine.succeed(
+        f"grep -q 'libtesseract.so.5' {kvmd}/lib/python*/site-packages/kvmd/apps/kvmd/ocr.py"
+    )
+    machine.succeed(
+        "${pkgs.python3}/bin/python3 -c '"
+        'import ctypes; '
+        'ctypes.CDLL("${pkgs.lib.getLib pkgs.libxkbcommon}/lib/libxkbcommon.so.0"); '
+        'ctypes.CDLL("${pkgs.lib.getLib pkgs.tesseract}/lib/libtesseract.so.5")'
+        "'"
+    )
   '';
 }

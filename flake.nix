@@ -83,7 +83,7 @@
         in
         lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           kvmd-services = pkgs.testers.runNixOSTest (
-            import ./tests/kvmd-services.nix { inherit self; }
+            import ./tests/kvmd-services.nix { inherit self pkgs; }
           );
         }
       );

@@ -74,12 +74,44 @@ in
   name = "pikvm-mcp-proxy";
 
   nodes.machine = mkNode true; # header + tool-login; self-signed cert (default)
-  nodes.off = {
-    # header only (OFF-parity) + a bring-your-own TLS cert (BYO-cert path).
-    imports = [ (mkNode false) ];
-    services.pikvm.mcpProxy.tls.certificate = "${testCert}/cert.pem";
-    services.pikvm.mcpProxy.tls.certificateKey = "${testCert}/key.pem";
-  };
+  nodes.off =
+    { pkgs, ... }:
+    {
+      # header only (OFF-parity) + a bring-your-own TLS cert (BYO-cert path),
+      # where the private KEY is a RUNTIME path (NOT a /nix/store path) — the
+      # faithful sops-nix / agenix scenario: a secret decrypted at boot into
+      # /run, owned by nginx, that nginx serves verbatim (never store-copied).
+      imports = [ (mkNode false) ];
+
+      # The public cert may live in the store (it's not secret); the KEY is
+      # materialized at boot to a runtime path owned by nginx. In a real deploy
+      # this file IS config.sops.secrets."…".path / config.age.secrets."…".path
+      # — here a oneshot stands in for sops-install-secrets / agenix, which
+      # decrypt during activation (before nginx). We add the explicit ordering
+      # a systemd-mode secret would need, to prove nginx waits for the key.
+      systemd.services.pikvm-byo-key = {
+        description = "Materialize the BYO TLS key at a runtime path (sops/agenix stand-in)";
+        wantedBy = [ "multi-user.target" ];
+        before = [ "nginx.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        path = [ pkgs.coreutils ];
+        script = ''
+          mkdir -p /run/pikvm-byo-tls
+          install -m0400 -o nginx -g nginx ${testCert}/key.pem /run/pikvm-byo-tls/key.pem
+        '';
+      };
+      systemd.services.nginx = {
+        after = [ "pikvm-byo-key.service" ];
+        wants = [ "pikvm-byo-key.service" ];
+      };
+
+      services.pikvm.mcpProxy.tls.certificate = "${testCert}/cert.pem";
+      # RUNTIME path — not "${testCert}/key.pem" — so the key never enters the store.
+      services.pikvm.mcpProxy.tls.certificateKey = "/run/pikvm-byo-tls/key.pem";
+    };
 
   testScript = ''
     import json
@@ -168,6 +200,20 @@ in
     )
     off.fail("systemctl is-active pikvm-nginx-selfsigned.service")
     machine.succeed("systemctl is-active pikvm-nginx-selfsigned.service")
+
+    # --- runtime-path key (the sops/agenix guarantee) ----------------------
+    # The KEY nginx serves is a RUNTIME path, NOT a /nix/store copy. This is the
+    # whole point of pointing certificateKey at a secret manager: the private
+    # key is passed to nginx verbatim and never lands in the world-readable
+    # store. Prove the rendered nginx config references /run (and NOT the store)
+    # for the key, that the file is owned by nginx (readable), and that nginx
+    # started only after the secret was materialized.
+    off.succeed(
+        "grep -qE 'ssl_certificate_key +/run/pikvm-byo-tls/key.pem;' /etc/nginx/nginx.conf"
+    )
+    off.fail("grep -qE 'ssl_certificate_key +/nix/store' /etc/nginx/nginx.conf")
+    off.succeed("test \"$(stat -c '%U' /run/pikvm-byo-tls/key.pem)\" = nginx")
+    off.succeed("systemctl is-active pikvm-byo-key.service")
 
     # === HEADER auth (strict, per MCP PR #18 / Option A): present header ====
     # A PRESENT Basic header is ALWAYS validated against kvmd — wrong → 401,

@@ -101,6 +101,9 @@ Pin and bump the base on your own schedule with `nix flake update pikvm-nixos`.
 - **[docs/hardware-validation.md](docs/hardware-validation.md)** — flash a Pi 4
   and run the checklist: the boot/device-tree, TC358743 capture, and USB-OTG
   layers a VM can't cover, plus exactly what to capture and send back.
+- **[docs/mcp-endpoint.md](docs/mcp-endpoint.md)** — expose the PiKVM MCP server
+  at `https://<pikvm>/mcp` so an AI agent can drive the KVM, with unified auth
+  (the same login as the web UI) and a bring-your-own-cert option.
 
 ## License
 

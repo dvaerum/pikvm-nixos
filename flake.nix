@@ -13,6 +13,15 @@
     # Declarative partitioning + direct-to-SD install. Pinned to PR #1190
     # (cross-compiled disk formatting) so the aarch64 image can be built and
     # written from an x86_64 host.
+    # AUTO-BUMPED weekly (.github/workflows/update.yml, bare `nix flake update`):
+    # `pull/1190/merge` is GitHub's FLOATING auto-merge ref, so each relock
+    # re-merges PR #1190 against the latest upstream disko base — keeping disko
+    # current AND re-incorporating this cross-compile disk-format patch every
+    # bump, as long as the PR stays open. Note: nothing in the VM/build gate
+    # exercises install-sd/disko, so a disko regression surfaces only at
+    # SD-flash/image-build time (never on a deployed device's auto-update).
+    # WHEN PR #1190 MERGES upstream this merge ref may go stale → switch disko to
+    # its normal branch (or a tagged release) then.
     disko = {
       url = "github:nix-community/disko?ref=pull/1190/merge";
       inputs.nixpkgs.follows = "nixpkgs";

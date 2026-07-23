@@ -143,23 +143,23 @@ in
     setup(machine)
     setup(off)
 
-    # === HEADER auth: valid PiKVM login authorizes on BOTH nodes ============
-    # A VALID Basic header authorizes at initialize on either node. But
-    # rejection is node-specific and VM-confirmed: with allowToolLogin=true,
-    # an ABSENT *or WRONG* header is NOT 401 — it opens a pre-auth session
-    # (200) that can only call `login`. The 401 rejection applies only on the
-    # OFF node (allowToolLogin=false, strict header auth). So no-creds and
-    # wrong-creds → 401 are asserted for OFF only.
+    # === HEADER auth (strict, per MCP PR #18 / Option A): present header ====
+    # A PRESENT Basic header is ALWAYS validated against kvmd — wrong → 401,
+    # valid → 200 — on BOTH nodes, regardless of allowToolLogin. Only an ABSENT
+    # header on the machine node (allowToolLogin=true) opens a pre-auth session
+    # (asserted as path (b) below).
     for node in (machine, off):
+        code, _, _ = mcp_init(node, "alice:wrongpw")
+        assert code == "401", f"wrong PiKVM creds must be rejected, got {code}"
         code, hdrs, _ = mcp_init(node, "alice:secretpw")
-        assert code == "200", f"valid PiKVM header login must authorize /mcp, got {code}"
+        assert code == "200", f"valid PiKVM login must authorize /mcp, got {code}"
         assert session_id(hdrs), "authorized initialize must return a session id"
 
-    # === OFF node (allowToolLogin=false): no header / wrong creds → 401 ======
+    # === ABSENT-header outcome is node-specific =============================
+    # allowToolLogin=false → a header-less initialize is rejected (401). The
+    # machine node's header-less → 200 pre-auth is asserted as path (b) below.
     code, _, _ = mcp_init(off)
     assert code == "401", f"no-creds must be 401 when allowToolLogin is off, got {code}"
-    code, _, _ = mcp_init(off, "alice:wrongpw")
-    assert code == "401", f"wrong PiKVM creds must be 401 when allowToolLogin is off, got {code}"
 
     # === TOOL-LOGIN path (b) — machine (allowToolLogin=true), header-less ====
     # Payload shapes confirmed against e8e9547 by @nixos-developer-system:

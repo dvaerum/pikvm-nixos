@@ -112,6 +112,11 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        # Run as the nginx user so the cert dir + files are nginx-owned —
+        # otherwise the 0700 root:root StateDirectory blocks nginx (which loads
+        # the cert as user `nginx`) from traversing it, failing its config test.
+        User = "nginx";
+        Group = "nginx";
         StateDirectory = "pikvm-nginx";
         StateDirectoryMode = "0700";
       };
@@ -173,6 +178,27 @@ in
     # to connect to it (the /api/ upstream). services.nginx runs as user
     # `nginx`; add it to `kvmd` (the group modules/kvmd.nix defines).
     users.users.nginx.extraGroups = [ "kvmd" ];
+
+    # Order pikvm-mcp strictly AFTER kvmd is actually serving. kvmd has a
+    # latent on_startup socket race; pikvm-mcp's onnxruntime startup CPU load,
+    # if it boots in parallel, starves kvmd's boot so kvmd keeps losing that
+    # race → crash-loop. kvmd only binds its API socket once it's past
+    # on_startup, so waiting for the socket to EXIST guarantees kvmd is out of
+    # its vulnerable window before mcp's load lands. This is an INTEGRATION
+    # fact (local kvmd) — it belongs here, not in the standalone MCP module
+    # (which can target a remote PiKVM with no local kvmd.service).
+    systemd.services.pikvm-mcp = lib.mkIf (config.services.pikvm-mcp.enable or false) {
+      after = [ "kvmd.service" ];
+      wants = [ "kvmd.service" ];
+      serviceConfig.ExecStartPre = pkgs.writeShellScript "wait-for-kvmd-sock" ''
+        for _ in $(seq 1 120); do
+          [ -S ${cfg.kvmdApiSocket} ] && exit 0
+          sleep 1
+        done
+        echo "kvmd API socket ${cfg.kvmdApiSocket} never appeared" >&2
+        exit 1
+      '';
+    };
 
     networking.firewall.allowedTCPPorts = [ 443 ];
   };

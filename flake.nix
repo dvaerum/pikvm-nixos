@@ -85,6 +85,9 @@
           kvmd-services = pkgs.testers.runNixOSTest (
             import ./tests/kvmd-services.nix { inherit self pkgs; }
           );
+          mcp-proxy = pkgs.testers.runNixOSTest (
+            import ./tests/mcp-proxy.nix { inherit self pkgs; }
+          );
         }
       );
 

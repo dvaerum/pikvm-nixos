@@ -49,3 +49,20 @@ jobs:
             .#nixosConfigurations.zero2w.config.system.build.toplevel
       - name: Build the MCP server (x86_64, native)
         run: nix build --print-build-logs .#packages.x86_64-linux.pikvm-mcp-server
+
+  vm-test:
+    name: NixOS VM test (kvmd-services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # runNixOSTest boots a real VM under QEMU/KVM. GitHub's Linux runners
+      # expose /dev/kvm, so the x86_64-linux check runs natively (no emulation).
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Run the kvmd-services VM test
+        run: nix build --print-build-logs .#checks.x86_64-linux.kvmd-services

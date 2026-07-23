@@ -143,24 +143,27 @@ in
     setup(machine)
     setup(off)
 
-    # === HEADER auth path (a) — on both nodes (allowToolLogin-independent) ===
+    # === HEADER auth: the valid PiKVM login authorizes on BOTH nodes ========
+    # Header auth is independent of allowToolLogin. The no-creds/wrong-creds
+    # OUTCOME differs by node (see below), so only the valid case is asserted
+    # for both here.
     for node in (machine, off):
-        code, _, _ = mcp_init(node)
-        assert code == "401", f"no-creds must be rejected, got {code}"
-        code, _, _ = mcp_init(node, "alice:wrongpw")
-        assert code == "401", f"wrong PiKVM creds must be rejected, got {code}"
         code, hdrs, _ = mcp_init(node, "alice:secretpw")
-        assert code == "200", f"valid PiKVM login must authorize /mcp, got {code}"
+        assert code == "200", f"valid PiKVM header login must authorize /mcp, got {code}"
         assert session_id(hdrs), "authorized initialize must return a session id"
 
-    # === OFF-parity: allowToolLogin=false → header-less is just 401 ==========
-    code, _, _ = mcp_init(off)  # already asserted 401 above; make the intent explicit
-    assert code == "401", "with allowToolLogin off, header-less connect must be 401"
+    # === OFF node (allowToolLogin=false): no header / wrong creds → 401 ======
+    # Without the tool-login toggle, an unauthenticated initialize is rejected.
+    code, _, _ = mcp_init(off)
+    assert code == "401", f"no-creds must be 401 when allowToolLogin is off, got {code}"
+    code, _, _ = mcp_init(off, "alice:wrongpw")
+    assert code == "401", f"wrong PiKVM creds must be 401, got {code}"
 
-    # === TOOL-LOGIN path (b) — allowToolLogin=true, header-less =============
+    # === TOOL-LOGIN path (b) — machine (allowToolLogin=true), header-less ====
     # Payload shapes confirmed against e8e9547 by @nixos-developer-system:
     # tools/call → result.isError + result.content[0].text; gating probe tool is
-    # `pikvm_version` (device-free).
+    # `pikvm_version` (device-free). With the toggle ON, a header-less
+    # initialize opens a PRE-AUTH session (200, NOT 401) that sees only `login`.
     code, hdrs, _ = mcp_init(machine)  # header-less initialize → pre-auth session
     assert code == "200", f"header-less initialize should open a pre-auth session, got {code}"
     sid = session_id(hdrs)

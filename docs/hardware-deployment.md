@@ -78,6 +78,31 @@ installs to it (or hands over a prepared card).
 
 ## 4. First-boot risks (never validated off QEMU)
 
+### Auto-detection vs explicit config
+
+Platform **selection is automatic**: `services.pikvm.kvmd.platform = "auto"` runs
+`kvmd-platform-detect.service` before kvmd, which detects the **board**
+(device-tree model), the **base** (HAT EEPROM → defaults to `v2` when no HAT),
+and the **capture** (scans for a `tc358743` v4l2 node → CSI, else USB). For the
+DIY Pi 4B + CSI kiosk it should auto-resolve to profile **`v2-hdmi-rpi4` (CSI)**.
+
+But the **firmware / device-tree layer is explicit** — baked into `hosts/rpi4.nix`
++ `configtxt-pikvm.nix` (vendor kernel, `tc358743` overlay, `gpu_mem=128`, `dwc2`
+OTG) — **not** detected. Detection *depends on that being correct*:
+
+> **⚠️ Silent USB fallback = a first-boot failure mode.** If the CSI driver
+> doesn't load, the `tc358743` v4l2 node is absent, so the detector **silently**
+> falls back to the USB / `v2-hdmi-rpi4` path → **no video, no error.** On first
+> boot, explicitly confirm the detector selected the **CSI** profile (not the USB
+> fallback) and that `/dev/video0` exists.
+
+**First-boot tuning candidates:** CMA sizing + `vc4-kms-v3d` (flagged in
+`configtxt-pikvm.nix`), `gpu_mem`, and **EDID** — the EDID comes from the packaged
+profile and is *not* an exposed option, so a custom-EDID target is a **manual
+step** if the captured resolution/modes are wrong.
+
+### The risks
+
 All apply directly to the Pi4B+CSI kiosk. Walk these on the spare — this **is**
 the validation:
 
@@ -87,7 +112,9 @@ the validation:
    **Both were disabled in *every* VM test** — the generic QEMU kernel
    crash-looped on them (the original U2 crash-loop). So first boot is the
    **first time atx/msd execute at all**; the exact things that crashed QEMU must
-   now be proven on the vendor kernel + real GPIO/OTG.
+   now be proven on the vendor kernel + real GPIO/OTG. (On a DIY Pi with no ATX
+   circuit, `atx=gpio` still opens `/dev/gpiochip0` but the power/reset controls
+   are harmless no-ops — the concern is that it *initialises* without crashing.)
 2. **TC358743 CSI capture** — the whole video path (DT-overlay → i2c bridge →
    `/dev/video0` → udev `kvmd-video` symlink → ustreamer). Zero QEMU coverage;
    **CMA/`gpu_mem` sizing + `vc4-kms-v3d`** are the top tuning suspects

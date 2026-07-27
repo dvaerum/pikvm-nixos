@@ -31,24 +31,31 @@ let
 
     PORT = int(os.environ["PORT"])
     ACTIONS = {"soft_connect", "udc-rebind", "reboot"}
+    UDC_ROOT = "/sys/class/udc"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
 
     class Handler(BaseHTTPRequestHandler):
-        def reply(self, code, ok, message):
-            body = json.dumps({"ok": ok, "message": message}).encode()
+        def _send_json(self, code, obj):
+            body = json.dumps(obj).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
+        def reply(self, code, ok, message):
+            self._send_json(code, {"ok": ok, "message": message})
+
+        def _authorized(self):
+            auth = self.headers.get("Authorization", "")
+            token = auth[7:] if auth.startswith("Bearer ") else ""
+            return bool(token) and hmac.compare_digest(token, TOKEN)
+
         def do_POST(self):
             if self.path.rstrip("/") != "/hid-recovery":
                 return self.reply(404, False, "not found")
-            auth = self.headers.get("Authorization", "")
-            token = auth[7:] if auth.startswith("Bearer ") else ""
-            if not token or not hmac.compare_digest(token, TOKEN):
+            if not self._authorized():
                 return self.reply(401, False, "unauthorized")
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
@@ -63,6 +70,31 @@ let
             if result.returncode == 0:
                 return self.reply(200, True, "%s triggered" % action)
             return self.reply(502, False, "%s failed (rc=%d)" % (action, result.returncode))
+
+        def do_GET(self):
+            # Read-only GROUND-TRUTH UDC state for the MCP health_check: the kvmd
+            # HID online flags can lie, but /sys/class/udc/<udc>/state is
+            # authoritative. Pure read of a world-readable (0444) sysfs node — no
+            # root, no polkit, no systemctl (never touches the privileged units).
+            if self.path.rstrip("/") != "/hid-recovery/udc-state":
+                return self.reply(404, False, "not found")
+            if not self._authorized():
+                return self.reply(401, False, "unauthorized")
+            try:
+                udcs = sorted(os.listdir(UDC_ROOT))
+            except FileNotFoundError:
+                udcs = []
+            if not udcs:
+                # No gadget bound (UDC unregistered) — endpoint is healthy, but
+                # HID is down; the null/"absent" pair is that ground-truth signal.
+                return self._send_json(200, {"udc": None, "state": "absent"})
+            udc = udcs[0]
+            try:
+                with open(os.path.join(UDC_ROOT, udc, "state")) as fh:
+                    state = fh.read().strip()
+            except OSError as exc:
+                return self.reply(500, False, "cannot read UDC state: %s" % type(exc).__name__)
+            return self._send_json(200, {"udc": udc, "state": state})
 
         def log_message(self, *args):
             pass  # don't log tokens/paths

@@ -116,5 +116,22 @@
     machine.wait_until_succeeds(
         f"test \"$(cat /sys/class/udc/{udc}/state)\" = configured", timeout=30
     )
+
+    # --- read-only UDC-state route (M4: ground truth for the MCP health_check) ---
+    # GET /hid-recovery/udc-state serves the live /sys/class/udc/<udc>/state,
+    # Bearer-authenticated like the POST actions but a pure world-readable sysfs
+    # read (no root/polkit/systemctl). The gadget is bound+configured above, so
+    # ground truth == "configured"; unauthenticated reads are refused.
+    def get(auth):
+        return machine.succeed(
+            "curl -s -o /tmp/udc -w '%{http_code}' "
+            + auth
+            + " http://127.0.0.1:8082/hid-recovery/udc-state"
+        ).strip()
+
+    assert get("") == "401", "unauthenticated udc-state must be 401"
+    assert get(bearer) == "200", "authenticated udc-state must be 200"
+    machine.succeed(f"grep -qE '\"udc\": *\"{udc}\"' /tmp/udc")
+    machine.succeed("grep -qE '\"state\": *\"configured\"' /tmp/udc")
   '';
 }

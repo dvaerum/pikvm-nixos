@@ -135,5 +135,24 @@
     machine.succeed("grep -qE '\"state\": *\"configured\"' /tmp/udc")
     # derived ground-truth HID-live flag the MCP health_check consumes
     machine.succeed("grep -qE '\"online\": *true' /tmp/udc")
+
+    # --- 502 on a failed recovery: the M0 escalation trigger ------------
+    # Unbind the gadget so soft_connect can't complete: the UDC dir stays
+    # present (find_udc still succeeds) but the soft_connect sysfs write is
+    # rejected (EOPNOTSUPP) on an unbound UDC, so the oneshot exits non-zero
+    # and the endpoint MUST surface 502 — the status the MCP M0 ladder
+    # escalates on (soft_connect → udc-rebind). (In dummy_hcd the state node
+    # keeps reading "configured" after unbind, so this exercises the write-
+    # error branch rather than a wait_configured timeout — same rc=1 → 502
+    # contract either way.) Fails fast; rebinds after so it doesn't disturb
+    # the rig for any later step.
+    gadget = "/sys/kernel/config/usb_gadget/kvmd"
+    machine.succeed(f'echo "" > {gadget}/UDC')
+    assert post(bearer, '{"action": "soft_connect"}') == "502", \
+        "a failed soft_connect must surface as 502 (M0 escalation trigger)"
+    machine.succeed(f'echo "{udc}" > {gadget}/UDC')
+    machine.wait_until_succeeds(
+        f"test \"$(cat /sys/class/udc/{udc}/state)\" = configured", timeout=30
+    )
   '';
 }

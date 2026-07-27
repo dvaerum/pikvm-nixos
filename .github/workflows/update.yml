@@ -12,10 +12,11 @@ name: Update flake inputs
 # the /mcp unified-auth flow end-to-end) INLINE in this job, before the commit —
 # so a broken MCP or nixpkgs bump fails the gate and never pushes. That inline
 # gate is what a separate PR + required-checks would buy, without the
-# cross-workflow PR-trigger + FLAKE_UPDATE_TOKEN machinery. nixpkgs and
-# pikvm-mcp-server are bumped together: if the gate fails, NEITHER ships — we
-# don't commit a lock we couldn't verify. (disko is intentionally PR-pinned and
-# nixos-raspberrypi is left alone here; only the two tracked inputs auto-bump.)
+# cross-workflow PR-trigger + FLAKE_UPDATE_TOKEN machinery. ALL inputs are
+# bumped together (bare `nix flake update`): if the gate fails, NOTHING ships —
+# we don't commit a lock we couldn't verify. (disko rides along via its floating
+# pull/1190/merge ref; nixos-raspberrypi bumps too, covered by the rpi4/zero2w
+# toplevel build in the gate.)
 on:
   schedule:
     - cron: "23 3 * * 1" # Mondays 03:23 UTC
@@ -138,6 +139,6 @@ jobs:
           if [ -n "${RELEASE_ADVANCE:-}" ]; then
             git commit -m "ci: NixOS release advanced ${RELEASE_ADVANCE} + weekly input bump (VM-verified)"
           else
-            git commit -m "ci: weekly flake input bump — all inputs except the disko pin (VM-verified)"
+            git commit -m "ci: weekly flake input bump — all inputs incl. the disko merge-ref (VM-verified)"
           fi
           git push

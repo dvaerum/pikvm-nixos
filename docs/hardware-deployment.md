@@ -2,157 +2,164 @@
 
 > **Status: PLAN — not yet executed.** pikvm-nixos has so far been verified
 > **only in QEMU/NixOS VM tests. It has never booted on a real Raspberry Pi.**
-> The first real boot is therefore its own validation milestone, done on a
-> **spare** device — never on the live kiosk. See [§2](#2-non-destructive-rollout).
+> Several things that were *disabled or faked* in the VM tests run for the first
+> time on metal (see [§4 first-boot risks](#4-first-boot-risks-never-validated-off-qemu)).
+> So the first real boot is its own validation milestone, done on a **spare**
+> device — never on the live kiosk.
 >
 > **Target kiosk (`pikvm01`, 10.109.1.1): confirmed a DIY Raspberry Pi 4 Model B
 > with a CSI TC358743 HDMI-capture board** — the flake's best-supported
-> configuration (host attr `rpi4`). No Compute Module 4 work is needed; the
-> CM4/other-board situation is kept in [Appendix A](#appendix-a-other-boards-cm4-pikvm-v3v4).
->
-> A few specifics (the standalone image artifact and the capture/platform
-> auto-detection behaviour) are pending confirmation from the aarch64-build node
-> and are marked **_(pending build-node)_**.
+> configuration (host attr `rpi4`); no CM4 work needed (see
+> [Appendix A](#appendix-a-other-boards-cm4--pikvm-v3v4)).
 
-## Hardware match
+## Two blocking inputs before anything is built
 
-| What the kiosk is | What `rpi4` builds for | Verdict |
-|---|---|---|
-| Raspberry Pi **4 Model B** | `raspberry-pi-4.base` (Pi 4B, vendor kernel) | ✅ match |
-| **CSI TC358743** HDMI capture | `tc358743` DT overlay + CSI config | ✅ match |
-| USB-OTG to the target | `dwc2` peripheral mode | ✅ supported |
+1. **SSH key (🔴 build-time blocker).** `hosts/common.nix` ships
+   `PasswordAuthentication = false` **and** an **empty** `authorizedKeys` for the
+   `pikvm` user, with no console password. **Flashed as-is, the headless Pi is
+   unreachable — no key, no password, no login.** A real SSH public key (or an
+   initial password) **must be pre-seeded into the `rpi4` config before the image
+   is built.** Both settings are `lib.mkDefault`, so a one-line host-file
+   override fixes it. → **User input: whose SSH pubkey(s) go on `pikvm01`?**
+2. **Board.** Already confirmed: DIY Pi 4B + CSI. ✅
 
-**Still to confirm from the user (secondary — don't block the build):**
-- **PiKVM HAT?** OLED display / ATX power control / fan. We package `kvmd-oled`
-  and ATX-over-GPIO, but they are **untested on real hardware** — if a HAT is
-  present, they're part of the first-boot checklist; if not, they stay off.
-- **Current boot medium + size** (SD card? USB SSD? capacity) — determines the
-  spare medium to prepare.
-
----
+Secondary (don't block the build): PiKVM HAT present? (OLED/ATX/fan); current
+boot medium + size.
 
 ## 1. Build the image and flash a spare medium
 
-The installer wraps disko:
+There is **no `dd`-able `.img` for the `rpi4` (vendor-kernel) target** — the flake
+wires only the `disko-install`-onto-a-disk path for it. (Only the `universal`
+mainline-kernel target defines a `system.build.sdImage`, and it has weaker CSI
+capture.) So the recommended go-live artifact path is:
 
 ```sh
-# On a build host, with the SPARE boot medium attached as /dev/sdX
+# On an aarch64 host (the Linux build node), with the SPARE medium attached:
 nix run github:dvaerum/pikvm-nixos#install-sd -- --board rpi4 --disk /dev/sdX
 #   → disko-install --flake .#rpi4 --disk main /dev/sdX
 ```
 
-- Partitions the medium **GPT: a 1 GiB FAT firmware partition** (`/boot/firmware`
-  — kernel, `config.txt`, overlays) **+ an ext4 root**, then installs the `rpi4`
-  system onto it.
-- Uses the **Raspberry Pi vendor kernel** (via nixos-raspberrypi) — required for
-  TC358743 CSI capture and hardware H.264.
-- The aarch64 image is **cross-built from x86_64** (binfmt/QEMU + the
-  nixos-raspberrypi binary cache) or built natively on aarch64. Native builds +
-  hardware-gap verification are routed to the Linux build node.
-- Whether a standalone `dd`-able `sdImage`/`.img` is also produced (vs only the
-  `disko-install`-onto-an-attached-disk path) is **_(pending build-node)_**.
+- Partitions **GPT: 1 GiB FAT firmware (`/boot/firmware`) + ext4 root**, installs
+  the `rpi4` system (Raspberry Pi **vendor kernel** — needed for TC358743 capture
+  + HW H.264).
+- **Build it natively on aarch64** (the build node's lane): the rootfs closure
+  cross-builds from x86_64 under binfmt (CI does this), but an *emulated* full
+  image build is multi-hour — native is the practical path.
+- ⚠️ **The `disko-install` partition/format/bootloader-write path is untested
+  even in CI** (CI only builds `system.build.toplevel`, never invokes
+  `disko-install`). The first real `disko-install` run is itself unvalidated — do
+  it onto the **spare** card.
+- Fallback for a `dd`-able file: `universal`'s `sdImage` (weaker capture) or wire
+  an image builder for the `rpi4` target (build node to confirm feasibility).
 
-**🖐 Physical hands (user task):** attach the spare medium to a machine with Nix
-+ a card/USB reader and run the command, or receive a prepared medium.
+**🖐 Physical hands (user):** provide the spare card; the build node produces +
+installs to it (or hands over a prepared card).
 
 ## 2. Non-destructive rollout
 
-The never-booted-on-hardware reality is de-risked by staging:
+1. **Image the stock Arch card first** (dd a full backup) — rollback anchor.
+2. **First real boot on a SPARE Pi 4B / spare card — not the live kiosk.**
+   Milestone: *"pikvm-nixos boots on real hardware for the first time."*
+3. **Keep the kiosk's original Arch card untouched** — rollback = reinsert +
+   power-cycle. **Never blind-reflash the only unit.**
+4. Touch production only after the full §4 walk passes on the spare.
 
-1. **First real boot on a SPARE Pi 4B / spare medium — not the live kiosk.**
-   This is its own milestone: *"pikvm-nixos boots on real hardware for the first
-   time."*
-2. **Keep the kiosk's original Arch card untouched** — physically remove it and
-   set it aside. Rollback = reinsert the Arch card and power-cycle. **Never
-   blind-reflash the only unit.**
-3. Only after full validation on the spare (§3) do we touch production.
+## 3. Config migration (stock Arch → pikvm-nixos)
 
-## 3. First-boot + validation checklist (run on the spare)
+- **SSH access** — see the blocker above; pre-seed the key at build time.
+- **kvmd users / htpasswd** — recreate with `kvmd-htpasswd`, or migrate
+  `/etc/kvmd/htpasswd` verbatim (same `ldap_salted_sha512` scheme).
+- **Network / hostname** — `networking.hostName` + the static **`10.109.1.1`**
+  (confirm netmask/gateway/VLAN) in the host config.
+- **TLS cert** — self-signed by default, or BYO-cert
+  (`services.pikvm.mcpProxy.tls.*` → a runtime secret).
+- **MCP `passwordFile`** — user-provided; **sops-nix not wired yet**. Only
+  relevant once the AI-agent stack (held PR #17) is enabled.
 
-Every item must pass before production. **🖐 = needs the user's spare Pi and eyes.**
+## 4. First-boot risks (never validated off QEMU)
 
-- [ ] 🖐 Boots; serial/HDMI console captured for first-boot debugging
-- [ ] SSH reachable
-- [ ] `kvmd.service` active and **serving** (`/api/auth/check` answers)
-- [ ] **CSI capture up** — the target's HDMI shows in kvmd. The **CMA / `gpu_mem`
-      sizing and the `vc4-kms-v3d` interaction** are the parts most likely to
-      need tuning (flagged in `hosts/configtxt-pikvm.nix`); the platform
-      auto-detector should resolve the CSI capture profile at boot
-      **_(pending build-node: exact auto-detect behaviour on real silicon)_**
-- [ ] 🖐 **USB-OTG HID drives the iPad** — emit a move, confirm the cursor
-      actually moves (flags lie; verify behaviourally)
-- [ ] nginx **443** up; **/mcp** authenticates with a PiKVM login (only if the
-      AI-agent stack is enabled — that's the separate held draft PR #17)
-- [ ] **HID-recovery** works (`soft_connect` re-enumerates the UDC)
-- [ ] 🖐 **OLED / ATX** if a PiKVM HAT is present
-- [ ] All green → proceed to cutover
+All apply directly to the Pi4B+CSI kiosk. Walk these on the spare — this **is**
+the validation:
 
-## 4. Config migration (stock Arch → pikvm-nixos)
-
-- **kvmd users / htpasswd** — recreate with `kvmd-htpasswd` on the new image, or
-  migrate `/etc/kvmd/htpasswd` verbatim (same `ldap_salted_sha512` scheme).
-- **Network / hostname** — set `networking.hostName = "pikvm"` (or `pikvm01`) and
-  the **static `10.109.1.1`** (confirm netmask/gateway/VLAN with the user) in the
-  host config.
-- **TLS cert** — the nginx front-door self-signs by default, or bring the
-  existing cert via the BYO-cert path (`services.pikvm.mcpProxy.tls.certificate`
-  / `.certificateKey` → a runtime secret).
-- **MCP `passwordFile` secret** — user-provided; **sops-nix is not wired into the
-  repo yet**, so at go-live either add sops-nix or materialise the file at the
-  referenced runtime path. (Only relevant once the AI-agent stack, PR #17, is
-  enabled.)
+1. **⚠️ `atx=gpio` + `msd=otg` — THE BIG ONE.** `platform=auto` on a real Pi 4
+   selects a profile that runs ATX-over-GPIO (opens `/dev/gpiochip0`) and
+   MSD-over-OTG (writes the vendor-kernel cdrom `inquiry_string` configfs attr).
+   **Both were disabled in *every* VM test** — the generic QEMU kernel
+   crash-looped on them (the original U2 crash-loop). So first boot is the
+   **first time atx/msd execute at all**; the exact things that crashed QEMU must
+   now be proven on the vendor kernel + real GPIO/OTG.
+2. **TC358743 CSI capture** — the whole video path (DT-overlay → i2c bridge →
+   `/dev/video0` → udev `kvmd-video` symlink → ustreamer). Zero QEMU coverage;
+   **CMA/`gpu_mem` sizing + `vc4-kms-v3d`** are the top tuning suspects
+   (`configtxt-pikvm.nix` self-flags both).
+3. **HW H.264 via VideoCore** (`gpu_mem=128`) — no GPU in the VM; ustreamer's
+   hardware encode path is unexercised.
+4. **USB-OTG on real silicon** — `dwc2` binding the gadget to `fe980000.usb` (VM
+   used `dummy_hcd`); the target actually enumerating the emulated kbd/mouse/MSD;
+   and the `hidg0/1/2 → kvmd-hid-*` udev rules (a real-appliance bug we fixed)
+   only ever fire on metal.
+5. **HID-recovery on the REAL UDC** — `soft_connect`/`udc-rebind` against real
+   `/sys/class/udc/fe980000.usb` (the VM's `dummy_hcd` state node lies
+   "configured", so the CI 502 test hits the write-error branch, not a real
+   timeout). Real idle-drop (~6 s) vs dead-after-reboot timing only exists on hw.
+6. **Platform detector** (`modules/kvmd.nix`, self-labeled "expected to be tuned
+   on real hardware") — parses `/proc/device-tree/model` + HAT EEPROM + the
+   TC358743 v4l2 name, falls back to `v2-hdmi-rpi4`. Never run against a real
+   device-tree; on a DIY Pi 4 (no HAT EEPROM) it should land on v2 + `video=hdmi`
+   iff the TC358743 is detected — **confirm the selected profile on first boot.**
+7. **Vendor-kernel boot chain** (u-boot + armstub8-gic → kernel) + the untested
+   `disko-install` format/bootloader-write — first real exercise is the spare card.
+8. **OLED/ATX HAT** — `luma-oled` packaged but unwired/untested; a DIY build may
+   not have the HAT. Low priority.
 
 ## 5. Production cutover
 
-**🖐 All physical-hands, in a maintenance window:**
+**🖐 Physical, in a maintenance window:**
 
-1. Confirm the spare passed the full §3 checklist.
+1. Confirm the spare passed the full §4 walk.
 2. Power down the kiosk; **remove and retain the Arch card** (rollback anchor).
-3. Insert the validated pikvm-nixos medium; boot.
-4. Re-run the §3 checklist on the production unit (network/target-specific items).
-5. If anything fails → reinsert the Arch card, power-cycle (instant rollback),
-   and report.
-6. Only after the appliance is proven on hardware does the AI-agent `/mcp`
-   enablement (held draft **PR #17**) get flipped, per its own go-live gates
-   (user OK + `passwordFile` secret + MCP-pin bump).
+3. Insert the validated pikvm-nixos card; boot; re-walk network/target-specific
+   items.
+4. On any failure → reinsert Arch card, power-cycle (instant rollback), report.
+5. Only after the appliance is proven on hardware does the AI-agent `/mcp` stack
+   (held PR #17) get flipped, per its own go-live gates.
 
-## 6. Summary of hardware-gated user tasks
+## 6. Who does what
 
-Nobody on the team has a Pi, so **every physical step is a user task**:
-
-- Confirm the secondary hardware facts (HAT: OLED/ATX/fan; boot medium + size).
-- Provide/attach a **spare** Pi 4B and spare boot medium.
-- Flash the medium (run `install-sd`, or receive a prepared one).
-- Boot the spare; **capture the serial/HDMI console**; report first-boot results
-  — this *is* the validation.
-- Perform the maintenance-window **swap + rollback**.
+- **Build node (`@nixos-developer-system`):** native aarch64 `rpi4` build +
+  `disko-install` to the card + owns the first-boot checklist. Wires the SSH-key
+  pre-seed once the key is known.
+- **This node (`@georgs-mac-mini`, NixOS/hosts/CI):** the host config, the
+  install-sd/disko path, docs, PR/merge. **No Pi/device access.**
+- **🖐 The user:** supplies the SSH key + a **spare Pi 4B + card**; physically
+  boots the spare and **captures the serial/HDMI console**; walks §4 and reports
+  (nobody on the team has a Pi); performs the maintenance-window swap + rollback.
+  Note: the live kiosk is currently driven (for iPad work) via its stock PiKVM —
+  that unit must **not** be reflashed until the spare is proven.
 
 ## Sequenced summary
 
-1. User confirms secondary facts (HAT, boot medium) — build doesn't block on these.
-2. Build the `rpi4` image; flash a **spare** SD.
-3. **First-ever real boot** on the spare; run the §3 checklist; tune CMA/capture.
-4. Migrate config (§4).
-5. Production cutover (§5) in a maintenance window, Arch card retained for rollback.
-6. Then (separately) flip the AI-agent `/mcp` stack (PR #17) per its own gates.
+1. **User provides the SSH pubkey** (blocker) + secondary facts.
+2. Pre-seed the key into `rpi4`; **native-build** the image on the build node.
+3. Backup the Arch card; **disko-install to a SPARE card**.
+4. **First-ever real boot** on the spare; walk §4 (atx/msd + capture first); tune.
+5. Migrate config (§3).
+6. Production cutover (§5), Arch card retained for rollback.
+7. Then (separately) the AI-agent `/mcp` stack (PR #17) per its own gates.
 
 ---
 
 ## Appendix A — other boards (CM4 / PiKVM v3/v4)
 
-Kept for completeness; **not needed for the confirmed DIY Pi 4B kiosk.**
+Not needed for the confirmed DIY Pi 4B kiosk; kept for completeness.
 
-The flake targets **only** Pi 4 Model B (`rpi4`) and Pi Zero 2 W (`zero2w`) —
-there is **no Compute Module 4 target.** PiKVM **v3 and v4 are CM4-based**, so a
-v3/v4 unit could **not** be booted by the current images. Supporting one would be
-net-new work:
-
-- Add a CM4 host target (pending whether nixos-raspberrypi exposes a CM4 /
-  compute-module module upstream).
-- A different flash path: **CM4-eMMC requires `rpiboot`** (USB mass-storage mode)
-  rather than an SD `dd`.
-- Re-verify capture (v3/v4 use the same TC358743 CSI, so the capture config
-  largely carries over) and the PiKVM HAT (OLED/ATX/fan).
-
-kvmd's runtime detector recognises `Compute Module 4` and the HAT, but detection
-is not a bootable image — the boot/firmware layer would still need the CM4 target.
+The flake targets only Pi 4 Model B (`rpi4`) and Pi Zero 2 W (`zero2w`) — **no
+Compute Module 4 target.** PiKVM v3/v4 are CM4-based, so they can't boot the
+current images. A CM4 target is **feasible** (CM4 is bcm2711 / Pi-4 family; the
+`bcm2711-rpi-cm4*.dtb` device trees already ship in `raspberrypifw` and the
+`universal` image copies them) — assemble `hosts/cm4.nix` from
+`raspberry-pi-4.base` + the CM4 DTB + the `[cm4]` `config.txt` block
+(`tc358743-audio`, `dtparam=i2c_arm=on` — present in `universal`, absent from the
+vendor `rpi4`), **pending confirmation of whether nixos-raspberrypi ships a CM4
+base** (build node to verify only if a CM4 unit ever appears). CM4-eMMC also needs
+the `rpiboot` flash path rather than an SD `dd`.

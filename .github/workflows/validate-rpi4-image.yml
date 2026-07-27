@@ -1,0 +1,106 @@
+name: Validate rpi4 flashable image
+
+# On-demand (workflow_dispatch): build the rpi4 disko RAW disk image and inspect
+# it OFFLINE — no hardware — to validate it is a complete, bootable flash artifact
+# before anyone commits a spare Pi. Builds
+# `.#nixosConfigurations.rpi4.config.system.build.diskoImages` (cachix trusted, so
+# the RPi vendor kernel is FETCHED not compiled), then dumps the partition table
+# and the FIRMWARE partition contents (u-boot / config.txt / start*.elf / DTBs /
+# overlays incl. tc358743) so we can confirm the RPi boot chain is actually there.
+#
+# NOTE: this is the disko #1190 CROSS build (x86_64 runner → aarch64 image) — the
+# exact artifact a from-x86_64 user or our own CI/auto-bump produces. A truly
+# NATIVE build needs real aarch64 hardware nobody on the team has, so "validated"
+# here means the cross-built image.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          large-packages: true
+          swap-storage: false
+      - uses: docker/setup-qemu-action@v3
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            extra-platforms = aarch64-linux
+            extra-substituters = https://nixos-raspberrypi.cachix.org
+            extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI=
+      - name: Enable KVM (disko image build runs in a VM)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Build rpi4 diskoImages (cross-build; vendor kernel from cachix)
+        run: |
+          nix build --print-build-logs --accept-flake-config \
+            '.#nixosConfigurations.rpi4.config.system.build.diskoImages'
+          echo "=== result/ tree ==="
+          ls -laLR result/ || ls -laL result/
+
+      - name: Inspect the raw image (the 4 validation questions)
+        run: |
+          set -euxo pipefail
+          # The image is the largest regular file under result/ (raw/img/qcow2).
+          img=$(find -L result/ -type f -printf '%s\t%p\n' | sort -rn | head -1 | cut -f2)
+          echo "IMAGE=$img"
+
+          echo "############## (1) single dd-able image + size ##############"
+          file "$img" || true
+          ls -laL "$img"; du -h --apparent-size "$img"; du -h "$img"
+
+          echo "############## (3) partition table / layout ##############"
+          sudo fdisk -l "$img" || true
+          sudo sfdisk -d "$img" || true
+          sudo parted -s "$img" print || true
+
+          echo "############## map partitions via loop ##############"
+          # qcow2 needs qemu-nbd; raw maps directly with losetup -P.
+          if file "$img" | grep -qi qcow; then
+            sudo modprobe nbd max_part=8
+            sudo qemu-nbd --connect=/dev/nbd0 "$img"
+            dev=/dev/nbd0; p1=/dev/nbd0p1; p2=/dev/nbd0p2
+            sleep 2
+          else
+            loop=$(sudo losetup -Pf --show "$img"); echo "loop=$loop"
+            dev=$loop; p1=${loop}p1; p2=${loop}p2
+          fi
+          lsblk "$dev" || true
+
+          echo "############## (2) FIRMWARE partition (p1) contents ##############"
+          sudo mkdir -p /mnt/fw /mnt/root
+          sudo mount -o ro "$p1" /mnt/fw || sudo mount "$p1" /mnt/fw || true
+          echo "--- firmware partition root ---"
+          sudo ls -la /mnt/fw || true
+          echo "--- RPi boot chain files (u-boot/start.elf/fixup/bootcode/armstub) ---"
+          sudo ls -la /mnt/fw | grep -iE 'u-?boot|start.*\.elf|fixup.*\.dat|bootcode|armstub' || echo "!! none of the expected boot-chain files matched"
+          echo "--- device trees (*.dtb) ---"
+          sudo ls -la /mnt/fw/*.dtb 2>/dev/null || echo "!! no *.dtb in firmware root"
+          echo "--- overlays (tc358743 / dwc2 / disable-bt) ---"
+          sudo ls -la /mnt/fw/overlays 2>/dev/null | grep -iE 'tc358743|dwc2|disable-bt' || echo "!! tc358743/dwc2/disable-bt overlays not found"
+          echo "--- config.txt ---"
+          sudo cat /mnt/fw/config.txt 2>/dev/null || echo "!! NO config.txt on firmware partition"
+
+          echo "############## root partition (p2) sanity ##############"
+          sudo mount -o ro "$p2" /mnt/root || true
+          sudo ls -la /mnt/root || true
+          echo "--- /nix present? ---"; sudo ls /mnt/root/nix/store 2>/dev/null | head -3 || echo "!! no /nix/store"
+          echo "--- /boot present? ---"; sudo ls -la /mnt/root/boot 2>/dev/null || true
+
+          echo "############## cleanup ##############"
+          sudo umount /mnt/fw || true
+          sudo umount /mnt/root || true
+          if [ "${dev}" = "/dev/nbd0" ]; then sudo qemu-nbd --disconnect /dev/nbd0 || true; else sudo losetup -d "$loop" || true; fi

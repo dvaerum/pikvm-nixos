@@ -49,8 +49,11 @@ nix run github:dvaerum/pikvm-nixos#install-sd -- --board rpi4 --disk /dev/sdX
   even in CI** (CI only builds `system.build.toplevel`, never invokes
   `disko-install`). The first real `disko-install` run is itself unvalidated — do
   it onto the **spare** card.
-- Fallback for a `dd`-able file: `universal`'s `sdImage` (weaker capture) or wire
-  an image builder for the `rpi4` target (build node to confirm feasibility).
+- **This is the only flash path for the `rpi4` target** — confirmed: there is no
+  `dd`-able image for it. The `universal` target *does* build a `dd`-able
+  `system.build.sdImage`, but it's the **mainline kernel with weaker CSI
+  capture**, so it is **not** the go-live path for this CSI kiosk. Mainline
+  go-live = native `rpi4` build + `disko-install` to the spare card.
 
 **🖐 Physical hands (user):** provide the spare card; the build node produces +
 installs to it (or hands over a prepared card).

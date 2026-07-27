@@ -54,9 +54,10 @@
 
   services.pikvm-mcp = {
     enable = true;
-    # CONFIRM AT GO-LIVE: "desktop" (absolute mouse) vs "ipad" (relative) — set
-    # to what the kiosk actually drives. Defaulting to desktop pending that.
-    target = "desktop";
+    # The kiosk drives an iPad (relative trackpad) — confirmed by the manager /
+    # iPad node; absolute positioning is a no-op there (MCP M1). "desktop" would
+    # be absolute-mouse; keep "ipad".
+    target = "ipad";
     host = "https://localhost"; # reach kvmd through our own nginx /api front-door
     verifySsl = false; # the front-door serves a self-signed cert by default
     security = "kvmd"; # unified auth: clients log in with their PiKVM web credentials

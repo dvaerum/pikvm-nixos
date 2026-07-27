@@ -28,35 +28,49 @@ boot medium + size.
 
 ## 1. Build the image and flash a spare medium
 
-There is **no `dd`-able `.img` for the `rpi4` (vendor-kernel) target** — the flake
-wires only the `disko-install`-onto-a-disk path for it. (Only the `universal`
-mainline-kernel target defines a `system.build.sdImage`, and it has weaker CSI
-capture.) So the recommended go-live artifact path is:
+The `rpi4` config gives **two** ways to produce a flashable medium — both build
+the vendor-kernel system (needed for TC358743 capture + HW H.264):
+
+**(a) A standalone `dd`-able raw image — primary, simplest for the user.** `disko`
+exposes `system.build.diskoImages` for `rpi4`, which builds a complete raw disk
+image **without** an attached target disk; `dd` it (or use Raspberry Pi Imager) to
+the card:
 
 ```sh
-# On an aarch64 host (the Linux build node), with the SPARE medium attached:
+# On an aarch64 host (the build node); no target disk attached:
+nix build github:dvaerum/pikvm-nixos#nixosConfigurations.rpi4.config.system.build.diskoImages
+# → a raw .img → dd (or Raspberry Pi Imager) onto the SPARE card
+```
+
+**(b) `disko-install` straight onto an attached disk** (the `install-sd` app):
+
+```sh
+# On the build node, with the SPARE medium attached as /dev/sdX:
 nix run github:dvaerum/pikvm-nixos#install-sd -- --board rpi4 --disk /dev/sdX
 #   → disko-install --flake .#rpi4 --disk main /dev/sdX
 ```
 
-- Partitions **GPT: 1 GiB FAT firmware (`/boot/firmware`) + ext4 root**, installs
-  the `rpi4` system (Raspberry Pi **vendor kernel** — needed for TC358743 capture
-  + HW H.264).
-- **Build it natively on aarch64** (the build node's lane): the rootfs closure
-  cross-builds from x86_64 under binfmt (CI does this), but an *emulated* full
-  image build is multi-hour — native is the practical path.
-- ⚠️ **The `disko-install` partition/format/bootloader-write path is untested
-  even in CI** (CI only builds `system.build.toplevel`, never invokes
-  `disko-install`). The first real `disko-install` run is itself unvalidated — do
-  it onto the **spare** card.
-- **This is the only flash path for the `rpi4` target** — confirmed: there is no
-  `dd`-able image for it. The `universal` target *does* build a `dd`-able
-  `system.build.sdImage`, but it's the **mainline kernel with weaker CSI
-  capture**, so it is **not** the go-live path for this CSI kiosk. Mainline
-  go-live = native `rpi4` build + `disko-install` to the spare card.
+- Both lay down **GPT: 1 GiB FAT firmware (`/boot/firmware`) + ext4 root** and
+  install the `rpi4` vendor-kernel system.
+- **Build natively on aarch64** (the build node's lane): the closure cross-builds
+  from x86_64 under binfmt (CI does this), but an *emulated* full image build is
+  multi-hour — native is practical. (`universal` also builds a `dd`-able
+  `sdImage`, but it's the **mainline kernel with weaker CSI capture** — not the
+  go-live path for this CSI kiosk.)
+- ⚠️ **Boot-validation of the artifact is PENDING.** The image *builders* exist
+  and eval, but the image has not yet been built + inspected to confirm the
+  **FIRMWARE vfat partition is populated** with the RPi bootloader / u-boot /
+  `config.txt` / DTBs / the `tc358743` overlay (not just the ext4 root). A
+  dispatch-only CI job (`.github/workflows/validate-rpi4-image.yml`, on main)
+  builds `diskoImages` (x86_64→aarch64 cross-build) and inspects exactly that —
+  **fold the result in when it lands** ("artifact validated" vs the current
+  "builder exists, boot-validation pending"). Path (a) is preferable to (b)
+  precisely because it's a build-time artifact the build node can inspect offline
+  before it ever touches hardware, whereas `disko-install`'s format/bootloader
+  step is untested even in CI.
 
-**🖐 Physical hands (user):** provide the spare card; the build node produces +
-installs to it (or hands over a prepared card).
+**🖐 Physical hands (user):** `dd` / Raspberry-Pi-Imager the built image onto the
+spare card (or the build node hands over a prepared card).
 
 ## 2. Non-destructive rollout
 

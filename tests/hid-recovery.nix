@@ -133,5 +133,7 @@
     assert get(bearer) == "200", "authenticated udc-state must be 200"
     machine.succeed(f"grep -qE '\"udc\": *\"{udc}\"' /tmp/udc")
     machine.succeed("grep -qE '\"state\": *\"configured\"' /tmp/udc")
+    # derived ground-truth HID-live flag the MCP health_check consumes
+    machine.succeed("grep -qE '\"online\": *true' /tmp/udc")
   '';
 }

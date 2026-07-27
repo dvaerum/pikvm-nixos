@@ -87,14 +87,17 @@ let
             if not udcs:
                 # No gadget bound (UDC unregistered) — endpoint is healthy, but
                 # HID is down; the null/"absent" pair is that ground-truth signal.
-                return self._send_json(200, {"udc": None, "state": "absent"})
+                return self._send_json(200, {"udc": None, "state": "absent", "online": False})
             udc = udcs[0]
             try:
                 with open(os.path.join(UDC_ROOT, udc, "state")) as fh:
                     state = fh.read().strip()
             except OSError as exc:
                 return self.reply(500, False, "cannot read UDC state: %s" % type(exc).__name__)
-            return self._send_json(200, {"udc": udc, "state": state})
+            # `online` is a derived ground-truth HID-live signal for the MCP
+            # health_check (state == "configured"); the raw `state` string rides
+            # along for diagnostics ("not attached" vs "addressed" vs …).
+            return self._send_json(200, {"udc": udc, "state": state, "online": state == "configured"})
 
         def log_message(self, *args):
             pass  # don't log tokens/paths

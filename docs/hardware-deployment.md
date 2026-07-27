@@ -2,145 +2,157 @@
 
 > **Status: PLAN — not yet executed.** pikvm-nixos has so far been verified
 > **only in QEMU/NixOS VM tests. It has never booted on a real Raspberry Pi.**
-> The first real boot is therefore its own validation milestone, and it must be
-> done on a **spare** device, never on the live kiosk. See
-> [§3 Non-destructive rollout](#3-non-destructive-rollout).
+> The first real boot is therefore its own validation milestone, done on a
+> **spare** device — never on the live kiosk. See [§2](#2-non-destructive-rollout).
 >
-> Some facts below (the standalone image artifact, CM4 upstream support, and the
-> first-boot risk list) are pending confirmation from the aarch64-build node and
-> are marked **_(v2-pending)_**.
+> **Target kiosk (`pikvm01`, 10.109.1.1): confirmed a DIY Raspberry Pi 4 Model B
+> with a CSI TC358743 HDMI-capture board** — the flake's best-supported
+> configuration (host attr `rpi4`). No Compute Module 4 work is needed; the
+> CM4/other-board situation is kept in [Appendix A](#appendix-a-other-boards-cm4-pikvm-v3v4).
+>
+> A few specifics (the standalone image artifact and the capture/platform
+> auto-detection behaviour) are pending confirmation from the aarch64-build node
+> and are marked **_(pending build-node)_**.
 
-## 0. The make-or-break: which board is the kiosk?
+## Hardware match
 
-Everything forks on one fact. The flake builds bootable images for **exactly two
-boards**:
+| What the kiosk is | What `rpi4` builds for | Verdict |
+|---|---|---|
+| Raspberry Pi **4 Model B** | `raspberry-pi-4.base` (Pi 4B, vendor kernel) | ✅ match |
+| **CSI TC358743** HDMI capture | `tc358743` DT overlay + CSI config | ✅ match |
+| USB-OTG to the target | `dwc2` peripheral mode | ✅ supported |
 
-| Host attr | Board | nixos-raspberrypi module |
-|-----------|-------|--------------------------|
-| `rpi4`   | Raspberry Pi **4 Model B** | `raspberry-pi-4.base` |
-| `zero2w` | Raspberry Pi **Zero 2 W**  | `raspberry-pi-02.base` |
+**Still to confirm from the user (secondary — don't block the build):**
+- **PiKVM HAT?** OLED display / ATX power control / fan. We package `kvmd-oled`
+  and ATX-over-GPIO, but they are **untested on real hardware** — if a HAT is
+  present, they're part of the first-boot checklist; if not, they stay off.
+- **Current boot medium + size** (SD card? USB SSD? capacity) — determines the
+  spare medium to prepare.
 
-There is **no Compute Module 4 (CM4) target.** But **PiKVM v3 and v4 are
-CM4-based.** So:
+---
 
-- **DIY PiKVM on a Pi 4 Model B → in range** (the `rpi4` image is built for it).
-- **PiKVM v3 / v4 (CM4) → we cannot boot it today.** No CM4 boot config exists,
-  and CM4-with-eMMC uses an entirely different flash path (`rpiboot` USB mass-
-  storage mode, not an SD `dd`). Supporting it is **net-new build work**
-  (add a CM4 host target — pending whether nixos-raspberrypi supports CM4
-  upstream, _(v2-pending)_) that must land **before anything is flashable.**
+## 1. Build the image and flash a spare medium
 
-kvmd's runtime platform detector *does* recognise `Compute Module 4` and the
-PiKVM HAT — but **detection is not a bootable image.** The boot/firmware layer
-only has Pi 4B and Zero 2 W.
-
-**→ Blocking input #1 (from the user): the exact kiosk hardware (§2).**
-
-## 1. What the flake produces, and the build → flash steps
-
-The installer app wraps disko:
+The installer wraps disko:
 
 ```sh
-# On a build host, with the target boot medium attached as /dev/sdX
+# On a build host, with the SPARE boot medium attached as /dev/sdX
 nix run github:dvaerum/pikvm-nixos#install-sd -- --board rpi4 --disk /dev/sdX
-# → disko-install --flake .#rpi4 --disk main /dev/sdX
+#   → disko-install --flake .#rpi4 --disk main /dev/sdX
 ```
 
-This partitions the medium **GPT: a 1 GiB FAT firmware partition** (kernel,
-`config.txt`, overlays, at `/boot/firmware`) **+ an ext4 root**, then installs
-the `rpi4` system onto it. The image uses the **Raspberry Pi vendor kernel**
-(via nixos-raspberrypi) — required for TC358743 CSI capture and hardware H.264.
-
-- It installs onto a **disk you attach to the build host** (an SD/USB reader),
-  not a `dd`-able `.img` by default. Whether a standalone `sdImage`/`.img`
-  artifact is also available is **_(v2-pending)_** with the build node.
-- Building the aarch64 image is cross-compiled from x86_64 (binfmt/QEMU + the
+- Partitions the medium **GPT: a 1 GiB FAT firmware partition** (`/boot/firmware`
+  — kernel, `config.txt`, overlays) **+ an ext4 root**, then installs the `rpi4`
+  system onto it.
+- Uses the **Raspberry Pi vendor kernel** (via nixos-raspberrypi) — required for
+  TC358743 CSI capture and hardware H.264.
+- The aarch64 image is **cross-built from x86_64** (binfmt/QEMU + the
   nixos-raspberrypi binary cache) or built natively on aarch64. Native builds +
-  VM/hardware-gap verification are routed to the Linux build node.
-- **Replacing stock Arch = reflashing the boot medium.** This is only
-  non-destructive if done on a **spare** medium (§3).
+  hardware-gap verification are routed to the Linux build node.
+- Whether a standalone `dd`-able `sdImage`/`.img` is also produced (vs only the
+  `disko-install`-onto-an-attached-disk path) is **_(pending build-node)_**.
 
-## 2. Hardware facts we must get from the user
+**🖐 Physical hands (user task):** attach the spare medium to a machine with Nix
++ a card/USB reader and run the command, or receive a prepared medium.
 
-These gate the entire plan. Please confirm:
-
-| # | Question | Why it matters |
-|---|----------|----------------|
-| a | PiKVM model: **v3 / v4 Mini / v4 Plus / DIY v2 / other?** | Identifies the board class |
-| b | SBC: **Pi 4 Model B** or **Compute Module 4?** | Decides whether a bootable image even exists |
-| c | If CM4: **eMMC (onboard)** or **Lite (SD)?** | eMMC ⇒ `rpiboot` flash path, much fiddlier |
-| d | HDMI capture: **CSI ribbon (TC358743)** or **USB dongle?** | Our image configures TC358743 CSI; USB capture needs a different platform |
-| e | **PiKVM HAT** present? (OLED, ATX power, fan) | We package `kvmd-oled` + ATX/GPIO, but they're **HW-untested** |
-| f | Boot medium + size (SD / USB-SSD / eMMC) | Determines the flash procedure |
-
-**What our image supports today:** Pi 4 Model B + TC358743 CSI capture +
-`dwc2` peripheral-mode USB-OTG + OLED/ATX (untested on real silicon).
-**Best-case match = a DIY PiKVM on a Pi 4 Model B with a CSI TC358743 capture
-board.**
-
-## 3. Non-destructive rollout
+## 2. Non-destructive rollout
 
 The never-booted-on-hardware reality is de-risked by staging:
 
-1. **First real boot on a SPARE Pi / spare boot medium — not the live kiosk.**
+1. **First real boot on a SPARE Pi 4B / spare medium — not the live kiosk.**
    This is its own milestone: *"pikvm-nixos boots on real hardware for the first
    time."*
-2. **Preserve the kiosk's original Arch storage untouched** — physically remove
-   the Arch SD/SSD and set it aside. Rollback = reinsert the original medium and
-   power-cycle. **Never blind-reflash the only unit.**
-3. Only after full validation on the spare (§5) do we touch production.
+2. **Keep the kiosk's original Arch card untouched** — physically remove it and
+   set it aside. Rollback = reinsert the Arch card and power-cycle. **Never
+   blind-reflash the only unit.**
+3. Only after full validation on the spare (§3) do we touch production.
+
+## 3. First-boot + validation checklist (run on the spare)
+
+Every item must pass before production. **🖐 = needs the user's spare Pi and eyes.**
+
+- [ ] 🖐 Boots; serial/HDMI console captured for first-boot debugging
+- [ ] SSH reachable
+- [ ] `kvmd.service` active and **serving** (`/api/auth/check` answers)
+- [ ] **CSI capture up** — the target's HDMI shows in kvmd. The **CMA / `gpu_mem`
+      sizing and the `vc4-kms-v3d` interaction** are the parts most likely to
+      need tuning (flagged in `hosts/configtxt-pikvm.nix`); the platform
+      auto-detector should resolve the CSI capture profile at boot
+      **_(pending build-node: exact auto-detect behaviour on real silicon)_**
+- [ ] 🖐 **USB-OTG HID drives the iPad** — emit a move, confirm the cursor
+      actually moves (flags lie; verify behaviourally)
+- [ ] nginx **443** up; **/mcp** authenticates with a PiKVM login (only if the
+      AI-agent stack is enabled — that's the separate held draft PR #17)
+- [ ] **HID-recovery** works (`soft_connect` re-enumerates the UDC)
+- [ ] 🖐 **OLED / ATX** if a PiKVM HAT is present
+- [ ] All green → proceed to cutover
 
 ## 4. Config migration (stock Arch → pikvm-nixos)
 
 - **kvmd users / htpasswd** — recreate with `kvmd-htpasswd` on the new image, or
   migrate `/etc/kvmd/htpasswd` verbatim (same `ldap_salted_sha512` scheme).
-- **Network / hostname** — set `networking.hostName` (currently `pikvm`) and the
-  static address (confirm `10.109.1.1` + any VLAN) in the host config.
-- **TLS cert** — the nginx front-door self-signs by default; or bring the
+- **Network / hostname** — set `networking.hostName = "pikvm"` (or `pikvm01`) and
+  the **static `10.109.1.1`** (confirm netmask/gateway/VLAN with the user) in the
+  host config.
+- **TLS cert** — the nginx front-door self-signs by default, or bring the
   existing cert via the BYO-cert path (`services.pikvm.mcpProxy.tls.certificate`
   / `.certificateKey` → a runtime secret).
-- **MCP `passwordFile` secret** — user-provided; **sops-nix is not wired into
-  the repo yet**, so at go-live either add sops-nix or materialise the file at
-  the referenced runtime path.
+- **MCP `passwordFile` secret** — user-provided; **sops-nix is not wired into the
+  repo yet**, so at go-live either add sops-nix or materialise the file at the
+  referenced runtime path. (Only relevant once the AI-agent stack, PR #17, is
+  enabled.)
 
-## 5. Cutover + real-hardware validation checklist
+## 5. Production cutover
 
-Run **on the spare first**; every item must pass before production:
+**🖐 All physical-hands, in a maintenance window:**
 
-- [ ] Boots; SSH reachable
-- [ ] `kvmd.service` active and **serving** (`/api/auth/check` answers)
-- [ ] **HDMI capture** shows the target — the CMA / `gpu_mem` sizing and the
-      `vc4-kms-v3d` interaction are the parts most likely to need tuning
-      (flagged in `hosts/configtxt-pikvm.nix`) _(v2-pending: build-node risk list)_
-- [ ] **USB-OTG HID drives the iPad** — emit a move, cursor actually moves
-      (flags lie; verify behaviourally)
-- [ ] nginx **443** up; **/mcp** authenticates with a PiKVM login (unified auth)
-- [ ] **HID-recovery** works (`soft_connect` re-enumerates the UDC)
-- [ ] OLED / ATX if a HAT is present
-- [ ] Only then: swap into production in a **maintenance window**, Arch medium
-      retained for instant rollback
+1. Confirm the spare passed the full §3 checklist.
+2. Power down the kiosk; **remove and retain the Arch card** (rollback anchor).
+3. Insert the validated pikvm-nixos medium; boot.
+4. Re-run the §3 checklist on the production unit (network/target-specific items).
+5. If anything fails → reinsert the Arch card, power-cycle (instant rollback),
+   and report.
+6. Only after the appliance is proven on hardware does the AI-agent `/mcp`
+   enablement (held draft **PR #17**) get flipped, per its own go-live gates
+   (user OK + `passwordFile` secret + MCP-pin bump).
 
-## 6. Hardware-gated tasks (require physical hands — nobody on the team has a Pi)
+## 6. Summary of hardware-gated user tasks
 
-These are **user tasks**:
+Nobody on the team has a Pi, so **every physical step is a user task**:
 
-- Confirm the exact hardware (§2) — **blocks the plan.**
-- Provide/attach the **spare** Pi or spare boot medium.
-- Physically **flash** the medium (run `install-sd` against the reader; `rpiboot`
-  if CM4-eMMC).
-- Insert, boot, and **capture the serial/HDMI console** for first-boot
-  debugging — this *is* the validation.
-- Perform the physical **swap + rollback** in the maintenance window.
+- Confirm the secondary hardware facts (HAT: OLED/ATX/fan; boot medium + size).
+- Provide/attach a **spare** Pi 4B and spare boot medium.
+- Flash the medium (run `install-sd`, or receive a prepared one).
+- Boot the spare; **capture the serial/HDMI console**; report first-boot results
+  — this *is* the validation.
+- Perform the maintenance-window **swap + rollback**.
 
 ## Sequenced summary
 
-1. **User confirms the board (§2).** ← blocking
-2. **If CM4:** first work item is *scope + build a CM4 host target and the
-   `rpiboot` flash path* (with the build node) before anything is flashable.
-   **If DIY Pi 4B:** proceed to the spare-device validation path.
-3. Build the image; flash a **spare** medium.
-4. First-ever real boot on the spare; run the §5 checklist; tune (CMA/capture).
-5. Migrate config (§4).
-6. Production cutover in a maintenance window, Arch retained for rollback.
-7. Only after the appliance is proven on hardware does the AI-agent `/mcp`
-   enablement (held draft PR #17) get flipped, per its own go-live gates.
+1. User confirms secondary facts (HAT, boot medium) — build doesn't block on these.
+2. Build the `rpi4` image; flash a **spare** SD.
+3. **First-ever real boot** on the spare; run the §3 checklist; tune CMA/capture.
+4. Migrate config (§4).
+5. Production cutover (§5) in a maintenance window, Arch card retained for rollback.
+6. Then (separately) flip the AI-agent `/mcp` stack (PR #17) per its own gates.
+
+---
+
+## Appendix A — other boards (CM4 / PiKVM v3/v4)
+
+Kept for completeness; **not needed for the confirmed DIY Pi 4B kiosk.**
+
+The flake targets **only** Pi 4 Model B (`rpi4`) and Pi Zero 2 W (`zero2w`) —
+there is **no Compute Module 4 target.** PiKVM **v3 and v4 are CM4-based**, so a
+v3/v4 unit could **not** be booted by the current images. Supporting one would be
+net-new work:
+
+- Add a CM4 host target (pending whether nixos-raspberrypi exposes a CM4 /
+  compute-module module upstream).
+- A different flash path: **CM4-eMMC requires `rpiboot`** (USB mass-storage mode)
+  rather than an SD `dd`.
+- Re-verify capture (v3/v4 use the same TC358743 CSI, so the capture config
+  largely carries over) and the PiKVM HAT (OLED/ATX/fan).
+
+kvmd's runtime detector recognises `Compute Module 4` and the HAT, but detection
+is not a bootable image — the boot/firmware layer would still need the CM4 target.

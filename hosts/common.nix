@@ -21,17 +21,31 @@
   # Weekly self-update from this repository (see modules/system/auto-upgrade.nix).
   services.pikvm.autoUpgrade.enable = lib.mkDefault true;
 
-  # Headless remote management.
+  # Faithful stock-PiKVM remote access: OS login is root/root over SSH with
+  # password auth, exactly like stock PiKVM (https://docs.pikvm.org/auth/). All
+  # `mkDefault`, so a hardened deployment overrides them (set
+  # PasswordAuthentication = false + add authorizedKeys + drop the root password).
+  # ⚠️ CHANGE the root password on a real device — and the kvmd admin/admin login
+  # (managed via kvmd-htpasswd; seeded in modules/kvmd.nix). They are TWO separate
+  # accounts, per the PiKVM handbook.
   services.openssh = {
     enable = true;
-    settings.PasswordAuthentication = lib.mkDefault false;
+    settings.PasswordAuthentication = lib.mkDefault true;
+    settings.PermitRootLogin = lib.mkDefault "yes";
   };
+
+  # Stock PiKVM's OS account is root/root. Set as the INITIAL password (mutable —
+  # `passwd` changes it and the change persists) so a freshly-flashed headless
+  # device is reachable the stock way. Harden by overriding this + the SSH
+  # settings above.
+  users.users.root.initialPassword = lib.mkDefault "root";
 
   users.users.pikvm = {
     isNormalUser = true;
     description = "PiKVM administrator";
     extraGroups = [ "wheel" ];
-    # Replace with real keys per deployment (or override in a host file).
+    # Optional: pre-seed operator SSH keys for a hardened key-only deployment
+    # (pair with services.openssh.settings.PasswordAuthentication = false above).
     openssh.authorizedKeys.keys = lib.mkDefault [ ];
   };
   # Allow wheel to sudo without password so the update service and admin can

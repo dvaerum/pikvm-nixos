@@ -1,25 +1,23 @@
-# PiKVM web entrypoint (nginx) — the 443 front-door for kvmd's API and the MCP
-# server.
+# PiKVM web front-door (nginx) — the faithful stock-PiKVM 443 dashboard, plus MCP.
 #
-# PiKVM's real appliance fronts everything with a TLS nginx on 443 (self-signed
-# on the LAN) that reverse-proxies to the individual daemons. That full
-# front-end isn't ported yet; this module is its first slice: a 443 vhost that
-# reverse-proxies kvmd's HTTP API (`/api/`, from kvmd's unix socket) and the
-# MCP Streamable-HTTP endpoint (`/mcp`). The future kvmd UI / ustreamer / Janus
-# locations slot into the SAME vhost later.
+# Serves, on a self-signed 443 vhost, the REAL PiKVM web experience by PORTING
+# kvmd's own stock nginx config out of the kvmd package (read+patch at build
+# time, so it auto-tracks kvmd version bumps rather than drifting from a
+# transcription):
+#   /            → the static web UI (kvmd's `share/kvmd/web`)
+#   /streamer    → ustreamer MJPEG (unix:/run/kvmd/ustreamer.sock)
+#   /api, /api/* → kvmd (unix:/run/kvmd/kvmd.sock) — kvmd self-auths (admin/admin)
+#   /api/media*  → kvmd-media (unix:/run/kvmd/media.sock)
+#   /redfish     → kvmd
+#   /mcp         → the PiKVM MCP server (Streamable HTTP)
+# The /janus/ws WebRTC blocks are carried verbatim from stock but inert until
+# Janus is packaged (Phase 3) — without it they 502/404 and the UI falls back to
+# MJPEG. See docs/faithful-pikvm-plan.md.
 #
-# It TLS-terminates at nginx and proxies plain HTTP to the MCP server on
-# loopback (services.pikvm-mcp binds 127.0.0.1:3000 by default). Off unless
-# `services.pikvm.mcpProxy.enable = true`.
-#
-# AUTH is intentionally NOT done here. The appliance uses UNIFIED auth: the MCP
-# server runs `services.pikvm-mcp.security = "kvmd"`, which validates each
-# client's PiKVM credentials against kvmd (/api/auth/check) — the SAME login as
-# the PiKVM web UI, one credential store (/etc/kvmd/htpasswd). nginx therefore
-# only TLS-terminates + proxies; adding an nginx-level auth_basic here would be
-# a second, non-unified password (kvmd's {SSHA512} htpasswd isn't even
-# nginx-auth_basic-readable). A forker who wants edge auth can add their own
-# nginx snippet.
+# AUTH is stock: the UI uses nginx `auth_request /auth_check` → kvmd /auth/check;
+# /api* + /redfish + /mcp set `auth_request off` and self-authenticate (kvmd's
+# {SSHA512} htpasswd, default admin/admin, seeded by modules/kvmd.nix). One
+# unified credential store, exactly like stock PiKVM.
 {
   config,
   lib,
@@ -28,10 +26,33 @@
 }:
 let
   cfg = config.services.pikvm.mcpProxy;
-  mcp = config.services.pikvm-mcp or { };
 
-  # Where the self-signed cert lands when the user supplies none. Kept off the
-  # Nix store (a private key must never be world-readable in /nix/store).
+  kvmd = config.services.pikvm.kvmd.package;
+  stockNginx = "${kvmd}/share/kvmd/configs.default/nginx";
+
+  # The stock server-context config, path-patched: the ONLY Arch path that must
+  # change is the static web root (/usr/share/kvmd → the package). The unix-socket
+  # upstreams (/run/kvmd/*), the /etc/kvmd/nginx/* includes, /etc/kvmd/web.css and
+  # the janus.js aliases are correct/inert as-is. (runCommand reads the real file
+  # on the Linux builder; `include`d below rather than readFile so it evals on any
+  # host without realising the aarch64 kvmd closure.)
+  serverConf = pkgs.runCommand "kvmd-nginx-server.conf" { } ''
+    substitute ${stockNginx}/kvmd.ctx-server.conf "$out" \
+      --replace-quiet /usr/share/kvmd ${kvmd}/share/kvmd
+  '';
+
+  # kvmd's nginx includes are self-contained directive snippets with no embedded
+  # paths — materialise them verbatim at the absolute path the stock config
+  # `include`s (/etc/kvmd/nginx/<f>), straight from the package (bump-proof).
+  includeFiles = [
+    "loc-proxy.conf"
+    "loc-websocket.conf"
+    "loc-nobuffering.conf"
+    "loc-nocache.conf"
+    "loc-login.conf"
+    "loc-bigpost.conf"
+  ];
+
   selfSignedDir = "/var/lib/pikvm-nginx";
   certFile = if cfg.tls.certificate != null then cfg.tls.certificate else "${selfSignedDir}/server.crt";
   keyFile = if cfg.tls.certificateKey != null then cfg.tls.certificateKey else "${selfSignedDir}/server.key";
@@ -40,8 +61,10 @@ in
 {
   options.services.pikvm.mcpProxy = {
     enable = lib.mkEnableOption ''
-      the nginx TLS reverse-proxy that exposes the PiKVM MCP server on port 443
-      at ${cfg.location or "/mcp"} (the "point your agent at the /mcp endpoint" UX)'';
+      the PiKVM web front-door: an nginx TLS (self-signed) 443 vhost serving the
+      stock kvmd dashboard (web UI + /api + MJPEG streamer + media) and the MCP
+      /mcp endpoint. Faithful to stock PiKVM; disable to keep the appliance
+      SSH-only'';
 
     location = lib.mkOption {
       type = lib.types.str;
@@ -58,13 +81,13 @@ in
     upstream = {
       address = lib.mkOption {
         type = lib.types.str;
-        default = mcp.address or "127.0.0.1";
+        default = config.services.pikvm-mcp.address or "127.0.0.1";
         defaultText = lib.literalExpression "config.services.pikvm-mcp.address";
-        description = "Address of the MCP HTTP backend to proxy to (loopback).";
+        description = "Address of the MCP HTTP backend to proxy /mcp to (loopback).";
       };
       port = lib.mkOption {
         type = lib.types.port;
-        default = mcp.port or 3000;
+        default = config.services.pikvm-mcp.port or 3000;
         defaultText = lib.literalExpression "config.services.pikvm-mcp.port";
         description = "Port of the MCP HTTP backend.";
       };
@@ -77,8 +100,9 @@ in
         description = ''
           TLS certificate (PEM). When null (default) a self-signed cert is
           generated at first boot into ${selfSignedDir} — matching PiKVM's
-          LAN-appliance reality (no ACME/domain). Point this at the shared
-          PiKVM cert once the full kvmd-nginx front-end is ported.
+          LAN-appliance reality (no ACME/domain). Point at your own cert (a
+          runtime secret path for the key — never a store literal) to serve a
+          trusted chain.
         '';
       };
       certificateKey = lib.mkOption {
@@ -91,20 +115,13 @@ in
     kvmdApiSocket = lib.mkOption {
       type = lib.types.path;
       default = "/run/kvmd/kvmd.sock";
-      description = ''
-        kvmd's HTTP API unix socket, reverse-proxied on this vhost under
-        `/api/`. This is the first slice of the kvmd-nginx front-door: it gives
-        the MCP server (services.pikvm-mcp, security = "kvmd") an HTTP route to
-        kvmd at https://localhost/api/auth/check — kvmd itself listens only on
-        this socket, not TCP. kvmd enforces its own auth on /api, so exposing it
-        on the vhost is safe. The default is kvmd's stock socket path.
-      '';
+      description = "kvmd's HTTP API unix socket (the nginx `kvmd` upstream target).";
     };
   };
 
   config = lib.mkIf cfg.enable {
-    # Generate a self-signed cert on first boot when the user supplies none.
-    # nginx orders after this so the cert exists before it starts.
+    # Self-signed cert on first boot when the user supplies none. nginx orders
+    # after this so the cert exists before it starts.
     systemd.services.pikvm-nginx-selfsigned = lib.mkIf needsSelfSigned {
       description = "Generate a self-signed TLS cert for the PiKVM nginx vhost";
       wantedBy = [ "multi-user.target" ];
@@ -112,9 +129,6 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        # Run as the nginx user so the cert dir + files are nginx-owned —
-        # otherwise the 0700 root:root StateDirectory blocks nginx (which loads
-        # the cert as user `nginx`) from traversing it, failing its config test.
         User = "nginx";
         Group = "nginx";
         StateDirectory = "pikvm-nginx";
@@ -136,15 +150,25 @@ in
       '';
     };
 
+    # kvmd's stock nginx includes, at the absolute path its config expects.
+    environment.etc = builtins.listToAttrs (
+      map (f: {
+        name = "kvmd/nginx/${f}";
+        value.source = "${stockNginx}/${f}";
+      }) includeFiles
+    );
+
     services.nginx = {
       enable = true;
-      recommendedProxySettings = true;
       recommendedTlsSettings = true;
 
-      # kvmd listens only on a unix socket; front it so its HTTP API is
-      # reachable over TCP/TLS (the MCP server's control calls + the
-      # security="kvmd" /api/auth/check round-trip both go via https://localhost).
-      upstreams.pikvm-kvmd.servers."unix:${cfg.kvmdApiSocket}" = { };
+      # kvmd's stock upstreams (all unix sockets: kvmd, ustreamer, media,
+      # janus-ws). janus-ws is inert without Janus (Phase 3) — nginx loads it
+      # fine and only 502s that route on request. `include`d as a store path so
+      # it evals without realising the kvmd closure.
+      appendHttpConfig = ''
+        include ${stockNginx}/kvmd.ctx-http.conf;
+      '';
 
       virtualHosts."pikvm" = {
         serverName = cfg.serverName;
@@ -153,43 +177,40 @@ in
         sslCertificate = certFile;
         sslCertificateKey = keyFile;
 
-        # kvmd HTTP API (auth, control, snapshot). kvmd enforces its own auth
-        # here — nginx just TLS-terminates + proxies to the socket. kvmd serves
-        # its routes at the socket ROOT (/auth/check, /hid, …) with NO /api
-        # prefix; the /api/ is a front-door convention we must STRIP. The
-        # trailing slash on proxyPass makes nginx replace the matched "/api/"
-        # with "/", so /api/auth/check → kvmd's /auth/check (else kvmd 404s).
-        locations."/api/".proxyPass = "http://pikvm-kvmd/";
+        # The stock kvmd dashboard routing (static UI + /api + streamer + media +
+        # redfish + auth_request), path-patched, plus our /mcp endpoint.
+        extraConfig = ''
+          include ${serverConf};
 
-        locations.${cfg.location} = {
-          proxyPass = "http://${cfg.upstream.address}:${toString cfg.upstream.port}";
-          # MCP Streamable HTTP is long-lived (POST/GET/DELETE /mcp with
-          # SSE-style streamed responses over plain HTTP/1.1 — not a WebSocket
-          # upgrade). Disable response buffering so streamed events flush
-          # immediately, and use generous timeouts so idle streams aren't cut.
-          extraConfig = ''
+          # MCP Streamable-HTTP endpoint (built-in). The MCP self-authenticates
+          # (security = "kvmd") so skip nginx auth_request; its responses stream
+          # over long-lived HTTP/1.1, so disable buffering + use long timeouts.
+          location ${cfg.location} {
+            auth_request off;
+            proxy_pass http://${cfg.upstream.address}:${toString cfg.upstream.port};
             proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
             proxy_buffering off;
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
-          '';
-        };
+          }
+        '';
       };
     };
 
-    # kvmd's API socket is 0660 kvmd:kvmd, so nginx must be in the kvmd group
-    # to connect to it (the /api/ upstream). services.nginx runs as user
-    # `nginx`; add it to `kvmd` (the group modules/kvmd.nix defines).
-    users.users.nginx.extraGroups = [ "kvmd" ];
+    # nginx (user `nginx`) must reach kvmd's + kvmd-media's unix sockets (0660,
+    # owned by those groups). kvmd's stock kvmd-nginx joins these same groups.
+    users.users.nginx.extraGroups = [
+      "kvmd"
+      "kvmd-media"
+    ];
 
-    # Order pikvm-mcp strictly AFTER kvmd is actually serving. kvmd has a
-    # latent on_startup socket race; pikvm-mcp's onnxruntime startup CPU load,
-    # if it boots in parallel, starves kvmd's boot so kvmd keeps losing that
-    # race → crash-loop. kvmd only binds its API socket once it's past
-    # on_startup, so waiting for the socket to EXIST guarantees kvmd is out of
-    # its vulnerable window before mcp's load lands. This is an INTEGRATION
-    # fact (local kvmd) — it belongs here, not in the standalone MCP module
-    # (which can target a remote PiKVM with no local kvmd.service).
+    # Order pikvm-mcp strictly AFTER kvmd is serving — kvmd has a latent
+    # on_startup socket race and pikvm-mcp's onnxruntime CPU spike, booting in
+    # parallel, can starve it into a crash-loop. Wait for the API socket to exist
+    # (kvmd only binds it past on_startup). Integration fact (local kvmd) — lives
+    # here, not in the standalone MCP module.
     systemd.services.pikvm-mcp = lib.mkIf (config.services.pikvm-mcp.enable or false) {
       after = [ "kvmd.service" ];
       wants = [ "kvmd.service" ];

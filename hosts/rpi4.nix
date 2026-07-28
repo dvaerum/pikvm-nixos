@@ -52,4 +52,8 @@
   # (kernel=kernel.img + initramfs, os_prefix generations) and skip U-Boot
   # entirely — killing both the SD-init failure and the missing-ESP path.
   boot.loader.raspberry-pi.bootloader = "kernel";
+
+  # This kiosk's KVM target is an iPad — relative-only HID (absolute mouse is a
+  # no-op there). Override the general "desktop" default for the built-in MCP.
+  services.pikvm-mcp.target = "ipad";
 }

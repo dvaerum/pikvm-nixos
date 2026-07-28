@@ -45,6 +45,10 @@
       # creates the pikvm-hid-recovery user + the loopback endpoint + token for
       # real — so we exercise the full endpoint → systemctl path, not a stub.
       services.pikvm.hidRecovery.endpoint.enable = true;
+      # mcp-server is imported only to DECLARE services.pikvm-mcp (so the
+      # endpoint's MCP-wiring definition resolves). It now defaults ON — pin it
+      # OFF here so this test doesn't spin up the MCP server (onnxruntime).
+      services.pikvm-mcp.enable = false;
 
       virtualisation.memorySize = 2048;
       virtualisation.diskSize = 4096;

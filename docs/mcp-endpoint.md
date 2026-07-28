@@ -8,13 +8,24 @@ screen over the [Model Context Protocol](https://modelcontextprotocol.io):
 https://<your-pikvm>/mcp
 ```
 
-It is **off by default**. When enabled, the nginx front-door that already
-fronts kvmd's API also reverse-proxies the MCP server, and the agent
-authenticates with the **same login as the PiKVM web UI** (unified auth).
+It is **on by default** — the appliance ships as a faithful PiKVM *plus* this MCP
+endpoint. The same nginx front-door that serves the PiKVM web dashboard on 443
+also reverse-proxies the MCP server, and the agent authenticates with the **same
+login as the PiKVM web UI** (unified auth) — the stock **admin/admin** by default.
 
-## Enable it
+> ⚠️ **First boot — change the defaults, like stock PiKVM.** Out of the box the
+> OS login is `root`/`root` (SSH) and the web/API/`/mcp` login is `admin`/`admin`
+> (two separate accounts, per the PiKVM handbook). Until you change them, anyone
+> who can reach the box can drive the KVM **and** the AI agent. Change them:
+> `passwd` (root) and `kvmd-htpasswd set admin` (web/API/MCP). Harden further:
+> point `services.pikvm-mcp.passwordFile` at a sops/agenix secret, disable `/mcp`
+> (`services.pikvm-mcp.enable = false`), disable the web front-door
+> (`services.pikvm.web.enable = false`), or switch SSH to keys-only.
 
-Add this to your host (e.g. alongside `imports = [ pikvm-nixos.nixosModules.appliance ]`):
+## Configure / override it
+
+It's on by default via `pikvm-nixos.nixosModules.appliance`. To change the
+defaults (or harden), set the options on your host, e.g.:
 
 ```nix
 { config, ... }:
@@ -41,12 +52,12 @@ Add this to your host (e.g. alongside `imports = [ pikvm-nixos.nixosModules.appl
   };
 
   # The 443 front-door: proxies kvmd /api + the MCP /mcp.
-  services.pikvm.mcpProxy.enable = true;
+  services.pikvm.web.enable = true;
 }
 ```
 
 That's the whole appliance side. `security = "kvmd"` means the agent logs in
-with a real PiKVM username/password; `services.pikvm.mcpProxy` gives the MCP
+with a real PiKVM username/password; `services.pikvm.web` gives the MCP
 server the HTTP route to kvmd it needs to validate them.
 
 ## Authenticating (client side)
@@ -72,7 +83,7 @@ To serve your **own** certificate (so verification works normally), point the
 proxy at your cert and key:
 
 ```nix
-services.pikvm.mcpProxy.tls = {
+services.pikvm.web.tls = {
   certificate    = "/etc/ssl/pikvm/fullchain.pem";           # public — a plain path is fine
   certificateKey = config.sops.secrets."pikvm/tls-key".path; # a RUNTIME secret path
 };
@@ -109,7 +120,7 @@ sops.secrets."pikvm/tls-key" = {
   mode  = "0400";
 };
 
-services.pikvm.mcpProxy.tls = {
+services.pikvm.web.tls = {
   certificate    = "/etc/ssl/pikvm/fullchain.pem";
   certificateKey = config.sops.secrets."pikvm/tls-key".path;
 };
@@ -124,7 +135,7 @@ age.secrets."pikvm-tls-key" = {
   mode  = "0400";
 };
 
-services.pikvm.mcpProxy.tls = {
+services.pikvm.web.tls = {
   certificate    = "/etc/ssl/pikvm/fullchain.pem";
   certificateKey = config.age.secrets."pikvm-tls-key".path;
 };
@@ -143,4 +154,4 @@ services.pikvm.mcpProxy.tls = {
 - The endpoint is path-routed on the **same 443 vhost** as kvmd's API, so it
   coexists with the (future) PiKVM web UI — no extra port.
 - `services.pikvm-mcp` can also run standalone against a **remote** PiKVM
-  (point `host` at it); the `mcpProxy` front-door is only for the local case.
+  (point `host` at it); the `services.pikvm.web` front-door is only for the local case.

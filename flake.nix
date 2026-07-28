@@ -116,9 +116,33 @@
         # `services.pikvm-mcp.enable = true`. Its nixosModules.default
         # self-provides the package (services.pikvm-mcp.package default), so no
         # global overlay is needed.
-        mcp-server = {
-          imports = [ pikvm-mcp-server.nixosModules.default ];
-        };
+        mcp-server =
+          { lib, pkgs, ... }:
+          {
+            imports = [ pikvm-mcp-server.nixosModules.default ];
+            # DEFAULT-ON with the stock admin/admin creds, like the rest of PiKVM
+            # — the /mcp endpoint is built in out of the box (the project goal:
+            # "the SAME as PiKVM, just with pikvm_mcp_server") with NO mandatory
+            # secret. security="kvmd" unifies client auth with the kvmd htpasswd
+            # (admin/admin). HARDEN by pointing passwordFile at a sops/agenix
+            # runtime secret + changing the htpasswd, or disable via
+            # services.pikvm-mcp.enable = false.
+            config.services.pikvm-mcp = {
+              enable = lib.mkDefault true;
+              security = lib.mkDefault "kvmd";
+              host = lib.mkDefault "https://localhost";
+              verifySsl = lib.mkDefault false;
+              # The general faithful default is a desktop KVM (absolute mouse).
+              # A device with relative-only HID (e.g. an iPad target) overrides
+              # this per-host — see hosts/rpi4.nix.
+              target = lib.mkDefault "desktop";
+              # username already defaults to "admin"; the MCP's own kvmd password
+              # defaults to the stock "admin" — a well-known default, not a
+              # secret, so a world-readable store file is acceptable. Override
+              # with a runtime secret path (sops/agenix) to harden.
+              passwordFile = lib.mkDefault (pkgs.writeText "pikvm-mcp-default-password" "admin");
+            };
+          };
         appliance = {
           imports = [
             (import ./hosts/appliance.nix)

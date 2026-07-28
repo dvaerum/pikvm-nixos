@@ -54,7 +54,7 @@ let
       atx.type = "disabled";
     };
 
-    services.pikvm.mcpProxy.enable = true; # 443 front-door: kvmd /api + /mcp
+    services.pikvm.web.enable = true; # 443 front-door: kvmd /api + /mcp
 
     services.pikvm-mcp = {
       enable = true;
@@ -108,9 +108,9 @@ in
         wants = [ "pikvm-byo-key.service" ];
       };
 
-      services.pikvm.mcpProxy.tls.certificate = "${testCert}/cert.pem";
+      services.pikvm.web.tls.certificate = "${testCert}/cert.pem";
       # RUNTIME path — not "${testCert}/key.pem" — so the key never enters the store.
-      services.pikvm.mcpProxy.tls.certificateKey = "/run/pikvm-byo-tls/key.pem";
+      services.pikvm.web.tls.certificateKey = "/run/pikvm-byo-tls/key.pem";
     };
 
   testScript = ''

@@ -89,7 +89,7 @@ spare card (or the build node hands over a prepared card).
 - **Network / hostname** — `networking.hostName` + the static **`10.109.1.1`**
   (confirm netmask/gateway/VLAN) in the host config.
 - **TLS cert** — self-signed by default, or BYO-cert
-  (`services.pikvm.mcpProxy.tls.*` → a runtime secret).
+  (`services.pikvm.web.tls.*` → a runtime secret).
 - **MCP `passwordFile`** — user-provided; **sops-nix not wired yet**. Only
   relevant once the AI-agent stack (held PR #17) is enabled.
 

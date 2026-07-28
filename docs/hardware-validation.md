@@ -134,7 +134,7 @@ curl -sk https://localhost/api/auth/check                # 401 → kvmd reachabl
 ```
 
 **MCP `/mcp` smoke** — only if `services.pikvm-mcp.enable = true` **and**
-`services.pikvm.mcpProxy.enable = true` (unified auth, `security = "kvmd"`):
+`services.pikvm.web.enable = true` (unified auth, `security = "kvmd"`):
 
 ```sh
 systemctl status pikvm-mcp --no-pager                    # active, no onnxruntime dlopen error

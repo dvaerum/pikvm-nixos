@@ -25,7 +25,7 @@
   ...
 }:
 let
-  cfg = config.services.pikvm.mcpProxy;
+  cfg = config.services.pikvm.web;
 
   kvmd = config.services.pikvm.kvmd.package;
   stockNginx = "${kvmd}/share/kvmd/configs.default/nginx";
@@ -59,12 +59,20 @@ let
   needsSelfSigned = cfg.tls.certificate == null || cfg.tls.certificateKey == null;
 in
 {
-  options.services.pikvm.mcpProxy = {
-    enable = lib.mkEnableOption ''
-      the PiKVM web front-door: an nginx TLS (self-signed) 443 vhost serving the
-      stock kvmd dashboard (web UI + /api + MJPEG streamer + media) and the MCP
-      /mcp endpoint. Faithful to stock PiKVM; disable to keep the appliance
-      SSH-only'';
+  options.services.pikvm.web = {
+    # DEFAULT-ON, like stock PiKVM (the box is a web KVM out of the box). Set to
+    # false to keep the appliance SSH-only (a hardened, headless deployment).
+    enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      example = false;
+      description = ''
+        The PiKVM web front-door: an nginx TLS (self-signed) 443 vhost serving the
+        stock kvmd dashboard (web UI + /api + MJPEG streamer + media) and the MCP
+        /mcp endpoint. On by default (faithful to stock PiKVM); set false to keep
+        the appliance SSH-only.
+      '';
+    };
 
     location = lib.mkOption {
       type = lib.types.str;

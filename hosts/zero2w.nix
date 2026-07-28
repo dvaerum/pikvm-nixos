@@ -41,4 +41,11 @@
   services.pikvm.kvmd.enable = true;
   services.pikvm.kvmd.platform = "auto";
   services.pikvm.otg.enable = true;
+
+  # The built-in MCP (onnxruntime + the detection stack) is too heavy for a
+  # Zero 2 W, so it defaults OFF here — the faithful PiKVM web dashboard
+  # (services.pikvm.web) stays default-ON. mkOverride 500 wins over the general
+  # mkDefault-true from the mcp-server wrapper (flake.nix) while staying
+  # user-overridable: `services.pikvm-mcp.enable = true;` re-enables it.
+  services.pikvm-mcp.enable = lib.mkOverride 500 false;
 }

@@ -166,7 +166,19 @@ the validation:
    items.
 4. On any failure → reinsert Arch card, power-cycle (instant rollback), report.
 5. Only after the appliance is proven on hardware does the AI-agent `/mcp` stack
-   (held PR #17) get flipped, per its own go-live gates.
+   get flipped, per its own go-live gates.
+6. **Drop the stock-box HID-recovery SSH bridge (least-privilege).** *Until*
+   cutover, `pikvm01` runs stock Arch and the **off-box** MCP (on georg's Mac,
+   `macos-nixos-setup`) self-recovers HID via a **root-SSH transport**
+   (`PIKVM_HID_RECOVERY_SSH=root@pikvm01.bb.vcamp.dk`) — a bridge, validated live
+   2026-07-30. The appliance ships the loopback HID-recovery endpoint **default-on**
+   (`services.pikvm.hidRecovery.endpoint` follows `services.pikvm-mcp.enable`), and
+   the MCP tool **prefers the HTTP endpoint when `PIKVM_HID_RECOVERY_URL` is set**.
+   So once `pikvm01` *is* the appliance: wire the off-box MCP at the appliance's
+   endpoint — **Option 2**: front it on the nginx **443** vhost with the bearer
+   token (the MCP is off-box, so *not* bare `loopback:8082` exposed on the LAN) —
+   and **remove the root-SSH grant + `PIKVM_HID_RECOVERY_SSH`** from the mac
+   wrapper, so the privileged SSH path doesn't outlive its need.
 
 ## 6. Who does what
 

@@ -123,6 +123,7 @@ build == a passing test.
 nix build --print-build-logs .#checks.x86_64-linux.kvmd-services
 nix build --print-build-logs .#checks.x86_64-linux.mcp-proxy
 nix build --print-build-logs .#checks.x86_64-linux.hid-recovery
+nix build --print-build-logs .#checks.x86_64-linux.mcp-hid-recovery-env
 ```
 Reading results / logs:
 ```sh
@@ -195,7 +196,8 @@ echo "== vm-test (needs /dev/kvm) =="
 nix build --print-build-logs \
   .#checks.x86_64-linux.kvmd-services \
   .#checks.x86_64-linux.mcp-proxy \
-  .#checks.x86_64-linux.hid-recovery
+  .#checks.x86_64-linux.hid-recovery \
+  .#checks.x86_64-linux.mcp-hid-recovery-env
 
 echo "ALL CI JOBS PASSED LOCALLY"
 ```

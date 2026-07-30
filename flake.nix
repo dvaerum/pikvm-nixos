@@ -100,6 +100,9 @@
           hid-recovery = pkgs.testers.runNixOSTest (
             import ./tests/hid-recovery.nix { inherit self pkgs; }
           );
+          mcp-hid-recovery-env = pkgs.testers.runNixOSTest (
+            import ./tests/mcp-hid-recovery-env.nix { inherit self pkgs; }
+          );
         }
       );
 

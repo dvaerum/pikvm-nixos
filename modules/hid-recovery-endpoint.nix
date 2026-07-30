@@ -107,9 +107,29 @@ let
 in
 {
   options.services.pikvm.hidRecovery.endpoint = {
-    enable = lib.mkEnableOption ''
-      the authenticated loopback HID-recovery endpoint that lets the MCP server
-      trigger the pikvm-hid-recover@<action> units'';
+    enable = lib.mkOption {
+      type = lib.types.bool;
+      # DEFAULT-ON whenever the built-in MCP is enabled. The MCP's
+      # pikvm_hid_recover (M0 self-recovery) and health_check UDC ground-truth
+      # (M4) tools are DECORATIVE without this loopback endpoint + the
+      # PIKVM_HID_RECOVERY_URL wiring below — the one tool that fixes an HID-down
+      # no-ops on the box that needs it. Phase 2 made the MCP default-on but left
+      # this behind; tie it to the MCP so a faithful default appliance has
+      # self-recovery working out of the box. Loopback-only (no firewall port),
+      # token auto-generated at first boot, polkit-least-privilege → safe to
+      # default on. Stays off when the MCP is off (e.g. zero2w), where it would
+      # be a pointless idle server. Set explicitly to override either way.
+      default = config.services.pikvm-mcp.enable or false;
+      defaultText = lib.literalExpression "config.services.pikvm-mcp.enable";
+      example = true;
+      description = ''
+        The authenticated loopback HID-recovery endpoint that lets the MCP server
+        trigger the pikvm-hid-recover@<action> units and read the ground-truth
+        UDC state (POST /hid-recovery, GET /hid-recovery/udc-state). Enabling it
+        also wires PIKVM_HID_RECOVERY_URL + the bearer token into the pikvm-mcp
+        service env. Defaults on when services.pikvm-mcp is enabled.
+      '';
+    };
 
     port = lib.mkOption {
       type = lib.types.port;

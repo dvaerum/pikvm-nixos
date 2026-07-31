@@ -94,6 +94,29 @@ in
     # The nixos-paths override must rewrite the baked /usr defaults to store paths.
     machine.succeed("grep -q /nix/store /etc/kvmd/override.d/00-nixos-paths.yaml")
 
+    # --- config-only changes must restart kvmd (restartTriggers) ----------
+    # kvmd re-reads its config only at startup (no SIGHUP/reload), so a
+    # config-only override.d change leaves the unit unchanged (same package) →
+    # nixos-rebuild switch would NOT restart kvmd and the change would be
+    # silently inert until a reboot/package bump. restartTriggers wires the
+    # generated config into the unit's X-Restart-Triggers so switch restarts
+    # kvmd when it changes. The deploy-time restart is HW-verified; here assert
+    # the wiring is present + references the config (fails if restartTriggers is
+    # dropped). Both kvmd and kvmd-media must carry it.
+    # NixOS aggregates restartTriggers into a single X-Restart-Triggers-<svc>
+    # store file whose CONTENT is the list of trigger paths, so read that file
+    # (not the unit line) and assert the config override is among them.
+    for svc in ("kvmd", "kvmd-media"):
+        unit = machine.succeed(f"systemctl cat {svc}.service")
+        assert "X-Restart-Triggers" in unit, \
+            f"{svc}: restartTriggers not wired (no X-Restart-Triggers)"
+        agg = machine.succeed(
+            f"systemctl cat {svc}.service | sed -n 's/^X-Restart-Triggers=//p'"
+        ).strip()
+        triggers = machine.succeed(f"cat {agg}")
+        assert "10-settings.yaml" in triggers and "00-nixos-paths.yaml" in triggers, \
+            f"{svc}: restartTriggers must include the declarative config:\n{triggers}"
+
     # --- the daemons actually run ----------------------------------------
     # (Regression guard: kvmd/kvmd-media must find the `ustreamer` python
     # module and load libc. They order after network-online, so wait for them.)

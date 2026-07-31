@@ -207,6 +207,20 @@ let
 
   userSettings = pkgs.writeText "10-settings.yaml" (builtins.toJSON cfg.settings);
 
+  # The declarative config the kvmd daemons parse at startup. kvmd re-reads
+  # config ONLY at startup (no SIGHUP/reload handler), so these must drive the
+  # units' restartTriggers — otherwise a config-only change (e.g.
+  # services.pikvm.kvmd.settings) rewrites these store files but leaves the
+  # units unchanged (same kvmd package), so `nixos-rebuild switch` never
+  # restarts kvmd and the change is silently inert until the next reboot or
+  # package bump. NB: a restart drops active kvmd sessions — the accepted
+  # tradeoff (a visible reconnect) vs a config change silently not applying.
+  kvmdConfigTriggers = [
+    nixosPaths
+    userSettings
+    mainConfigs
+  ] ++ lib.optional cfg.ipadCompat.enable ipadOverride;
+
   # Tools kvmd shells out to at runtime, placed on the services' PATH.
   runtimePath = [
     ustreamer
@@ -426,6 +440,8 @@ in
       requires = lib.optional isAuto "kvmd-platform-detect.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
+      # Restart kvmd when its declarative config changes (see kvmdConfigTriggers).
+      restartTriggers = kvmdConfigTriggers;
       path = runtimePath;
       serviceConfig = {
         User = "kvmd";
@@ -446,6 +462,8 @@ in
       ++ lib.optional isAuto "kvmd-platform-detect.service";
       requires = lib.optional isAuto "kvmd-platform-detect.service";
       wantedBy = [ "multi-user.target" ];
+      # kvmd-media reads the same config; restart it on config changes too.
+      restartTriggers = kvmdConfigTriggers;
       path = runtimePath;
       serviceConfig = {
         User = "kvmd-media";

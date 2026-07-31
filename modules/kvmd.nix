@@ -146,13 +146,35 @@ let
     '';
   };
 
-  # Corrections for the absolute /usr paths baked into kvmd's schema defaults
+  # Corrections for the absolute Arch paths baked into kvmd's schema defaults
   # (kvmd/apps/_scheme.py). YAML is a superset of JSON, so toJSON is a valid
-  # override document. NB: this override must stay COMPLETE against the scheme —
-  # a missed path is a latent FileNotFoundError that only surfaces when that
-  # code path first runs (ocr.tessdata below killed the daemon on every
-  # KVM-page open). A full _scheme.py path audit + the remaining unrewritten
-  # paths (e.g. the streamer's /bin/true hooks) land in a follow-up.
+  # override document. This override must stay COMPLETE against the scheme for
+  # the apps we actually run — a missed path is a latent FileNotFoundError that
+  # only surfaces when that code path first executes (ocr.tessdata killed the
+  # daemon on every KVM-page open). Full audit of every absolute path default in
+  # _scheme.py, and where each is handled:
+  #
+  #   REWRITTEN here (read by a RUNNING app — kvmd / kvmd-media / kvmd-otg):
+  #     info.extras, info.hw.platform, info.hw.vcgencmd_cmd, hid.keymap;
+  #     ocr.tessdata (else the OCR poller crash-loops kvmd, see below);
+  #     streamer.pre_start_cmd / post_stop_cmd (default /bin/true, absent on
+  #     NixOS — /bin has only `sh`; streamer.cmd itself is the ustreamer store
+  #     path set by the platform profile, see mainConfigs).
+  #
+  #   HANDLED ELSEWHERE (not an Arch-package path we must rewrite):
+  #     streamer.cmd → platform main.yaml (mainConfigs); info.meta,
+  #     auth totp/ipmi/vnc password + edid files → materialised under /etc/kvmd.
+  #
+  #   INERT — the owning app is NEVER started (we define no kvmd-otgnet /
+  #   kvmd-ipmi / kvmd-vnc / kvmd-janus service), so these defaults are never
+  #   read: otgnet.{ip,iptables,sysctl,dnsmasq,systemd_run,systemctl}_cmd +
+  #   otgnet pre/post hooks (_scheme.py 637–671), janus bin (795), ipmi keymap
+  #   (713), gpio switch default_edid (458).
+  #
+  #   LATENT — real feature path, but needs more than a path rewrite (a sudoers
+  #   rule for the kvmd user + the setuid sudo wrapper), tracked separately:
+  #     msd/pst remount_cmd (503) = sudo + kvmd-helper-pst-remount. Only fires
+  #     on an MSD read-write remount; harmless until MSD image write is used.
   nixosPaths = pkgs.writeText "00-nixos-paths.yaml" (
     builtins.toJSON {
       kvmd = {
@@ -172,6 +194,13 @@ let
         # tessdata shipped by the exact tesseract kvmd links (eng+osd — see
         # pkgs/kvmd; kvmd's ocr.langs default is eng).
         ocr.tessdata = "${kvmd.tesseract}/share/tessdata";
+        # The streamer's optional start/stop hooks default to /bin/true (Arch);
+        # on NixOS /bin has only `sh`, so every stream start/stop hits a
+        # FileNotFoundError. Preserve the no-op semantics with a real `true`.
+        streamer = {
+          pre_start_cmd = [ (lib.getExe' pkgs.coreutils "true") "pre-start" ];
+          post_stop_cmd = [ (lib.getExe' pkgs.coreutils "true") "post-stop" ];
+        };
       };
     }
   );

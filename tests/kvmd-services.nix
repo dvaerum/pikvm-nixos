@@ -97,18 +97,18 @@ in
     # --- kvmd must actually SERVE (not just exec) ------------------------
     # wait_for_unit on a Type=simple unit returns the instant kvmd execs —
     # BEFORE its Python on_startup runs (which can crash). So assert kvmd
-    # really serves its API on the socket, restarted at most once, and that
-    # the OTG HID symlinks the udev rules create actually appear (that catches
-    # both a crash-looping kvmd and the missing-hid-udev regression).
+    # really serves its API on the socket, and that the OTG HID symlinks the
+    # udev rules create actually appear (the missing-hid-udev regression).
     # Hit kvmd's socket DIRECTLY (no nginx here), so use kvmd's root route
     # /auth/check — there is no /api prefix on kvmd's own routes (that prefix
     # is only the nginx front-door convention).
+    # (Crash-loop survival is asserted below via MainPID after the OCR poller
+    # is driven — NOT via NRestarts, which systemd resets on its own.)
     machine.wait_until_succeeds(
         "${pkgs.curl}/bin/curl -s --unix-socket /run/kvmd/kvmd.sock"
         " http://localhost/auth/check -o /dev/null -w '%{http_code}' | grep -qE '401|403'",
         timeout=90,
     )
-    machine.succeed("test $(systemctl show kvmd.service -p NRestarts --value) -le 1")
     machine.wait_for_unit("kvmd-otg.service")
     machine.wait_until_succeeds("test -e /dev/kvmd-hid-keyboard", timeout=15)
 

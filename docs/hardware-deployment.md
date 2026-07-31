@@ -26,6 +26,27 @@
 Secondary (don't block the build): PiKVM HAT present? (OLED/ATX/fan); current
 boot medium + size.
 
+## ⚠️ Known issue (TEMPORARY — delete when fixed): a kvmd-touching auto-upgrade exits 4 but SUCCEEDED
+
+A `nixos-rebuild switch` (or the weekly `nixos-upgrade.service`) whose closure
+changes the kvmd package currently **exits `4/NOPERMISSION`** —
+`switch-to-configuration` reports `kvmd-otg.service` failed with a
+`PermissionError … inquiry_string_cdrom`. **The update itself SUCCEEDED** (the new
+generation is live and running); `kvmd-otg` just isn't idempotent and errors when
+it re-asserts an already-assembled USB gadget. Two consequences until the fix lands:
+
+- **The updater looks failed though it isn't.** Do NOT read a non-zero
+  `nixos-upgrade` exit as a failed update — check *which* unit failed; if it's only
+  `kvmd-otg`, the deploy is fine (confirm the new generation is current).
+- **`kvmd-otg` is left `failed` → OTG/HID stays down until a reboot.** On a cabled
+  box, a routine auto-upgrade silently drops keyboard/mouse/MSD to the target until
+  you reboot the Pi.
+
+Root fix in progress (make `kvmd-otg` tear down / skip when the gadget already
+exists). **Remove this whole section once that lands and is HW-confirmed.**
+(Surfaced 2026-07-31 by the real-HW node during the #44 deploy; pre-existing, not a
+regression.)
+
 ## 1. Build the image and flash a spare medium
 
 The `rpi4` config gives **two** ways to produce a flashable medium — both build

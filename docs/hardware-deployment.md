@@ -26,25 +26,33 @@
 Secondary (don't block the build): PiKVM HAT present? (OLED/ATX/fan); current
 boot medium + size.
 
-## ⚠️ Known issue (TEMPORARY — delete when fixed): a kvmd-touching auto-upgrade exits 4 but SUCCEEDED
+## 🔴 Known issue (P0, TEMPORARY — delete when fixed): the OTG gadget fails to bind → keyboard/mouse/MSD non-functional
 
-A `nixos-rebuild switch` (or the weekly `nixos-upgrade.service`) whose closure
-changes the kvmd package currently **exits `4/NOPERMISSION`** —
-`switch-to-configuration` reports `kvmd-otg.service` failed with a
-`PermissionError … inquiry_string_cdrom`. **The update itself SUCCEEDED** (the new
-generation is live and running); `kvmd-otg` just isn't idempotent and errors when
-it re-asserts an already-assembled USB gadget. Two consequences until the fix lands:
+On the current appliance the USB OTG gadget **never fully binds.** `kvmd-otg`
+unconditionally writes `…/functions/mass_storage.usb0/lun.0/inquiry_string_cdrom`,
+an attribute the Pi vendor kernel (6.18.34) does **not** expose → `EACCES` → gadget
+assembly aborts **before** the UDC bind. Result: the UDC is empty, `/dev/kvmd-hid-*`
+are missing, and `/api/hid` reports `keyboard.online=false` / `mouse.online=false`.
 
-- **The updater looks failed though it isn't.** Do NOT read a non-zero
-  `nixos-upgrade` exit as a failed update — check *which* unit failed; if it's only
-  `kvmd-otg`, the deploy is fine (confirm the new generation is current).
-- **`kvmd-otg` is left `failed` → OTG/HID stays down until a reboot.** On a cabled
-  box, a routine auto-upgrade silently drops keyboard/mouse/MSD to the target until
-  you reboot the Pi.
+**⇒ The emulated keyboard, mouse, and Mass Storage to the target are
+NON-FUNCTIONAL** — and have been since the first boot. So the dashboard / `/mcp`
+KVM-control path can't drive a target's HID or mount media yet (video/MJPEG is
+unaffected).
 
-Root fix in progress (make `kvmd-otg` tear down / skip when the gadget already
-exists). **Remove this whole section once that lands and is HW-confirmed.**
-(Surfaced 2026-07-31 by the real-HW node during the #44 deploy; pre-existing, not a
+- **`systemctl status kvmd-otg` may show `active` — that is a FALSE green** (a
+  partially-assembled gadget). Don't trust the unit state; check `/api/hid`
+  (`keyboard.online`/`mouse.online`) and `/sys/class/udc/*/state`.
+- **A reboot does NOT fix it** — it fails identically on every boot.
+- A kvmd-package-changing `nixos-rebuild switch` also surfaces it as a non-zero
+  (`4/NOPERMISSION`) exit from `switch-to-configuration`; the *system* update still
+  succeeds, but HID/MSD remain dead.
+
+Known **P0**, fix in progress (stop kvmd writing the kernel-absent attribute / make
+the MSD cdrom-inquiry conditional so the gadget binds). **Remove this whole section
+once the fix lands and is HW-confirmed** (gadget binds; `keyboard.online`/
+`mouse.online` = true). Until then, **HID/MSD end-to-end can't be validated on a
+cabled target** — the OTG-target cabling step is on hold behind this fix.
+(Root-caused 2026-07-31 by the real-HW node; pre-existing since first boot, not a
 regression.)
 
 ## 1. Build the image and flash a spare medium

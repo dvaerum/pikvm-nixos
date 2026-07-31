@@ -13,6 +13,7 @@
   fetchFromGitHub,
   symlinkJoin,
   kvmd,
+  kvmd-extras, # kvmd's extras minus the unpackaged-daemon ones (ipmi/vnc)
   ttyd,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
@@ -49,14 +50,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # ttyd the module's kvmd-webterm.service runs (upstream depends ttyd>=1.7.7).
     inherit ttyd;
 
-    # kvmd's own extras (ipmi, vnc, …) ∪ webterm — the module sets
-    # kvmd.info.extras to this AND nginx-includes
+    # The advertised kvmd extras (ipmi/vnc filtered out — see kvmd-extras) ∪
+    # webterm. The module sets kvmd.info.extras to this AND nginx-includes
     # ${extrasDir}/*/nginx.ctx-{http,server}.conf (kvmd's stock nginx.conf.mako
-    # uses exactly that glob to self-register each extra).
+    # uses exactly that glob to self-register each extra). Only webterm ships an
+    # nginx.ctx-*.conf, so the glob activates only it — filtering ipmi/vnc (which
+    # have none) is a no-op for nginx and leaves /extras/webterm/ttyd untouched.
     extrasDir = symlinkJoin {
       name = "kvmd-extras-with-webterm";
       paths = [
-        "${kvmd}/share/kvmd/extras"
+        kvmd-extras
         "${finalAttrs.finalPackage}/share/kvmd/extras"
       ];
     };

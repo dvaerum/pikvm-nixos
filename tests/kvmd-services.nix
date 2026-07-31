@@ -228,6 +228,21 @@ in
     assert "eng" in ocr_state["langs"]["available"], \
         f"OCR tessdata must list English (dir rewritten + populated): {ocr}"
 
+    # --- info.extras must advertise NOTHING here (terminal OFF) ----------
+    # The base info.extras points at kvmd-extras (kvmd's extras minus the
+    # unpackaged-daemon ones, ipmi/vnc — empty on kvmd 4.188). With the web
+    # Terminal off (as in this test), the appliance runs no extras' daemons, so
+    # /api/info must advertise an EMPTY set — advertising ipmi/vnc would make the
+    # dashboard query dead services (DBusError). (The webterm test covers the
+    # terminal-on case: extras == {webterm}.)
+    einfo = machine.succeed(
+        "${pkgs.curl}/bin/curl -s --unix-socket /run/kvmd/kvmd.sock"
+        " -H 'X-KVMD-User: admin' -H 'X-KVMD-Passwd: admin'"
+        " http://localhost/info?fields=extras"
+    )
+    extras = json.loads(einfo)["result"]["extras"]
+    assert extras == {}, f"terminal-off appliance must advertise no extras (ipmi/vnc filtered); got {sorted(extras.keys())}"
+
     # (2) Crash-path guard: open the SAME stream WS the KVM dashboard opens
     # (/ws?stream=1) so kvmd's initial-state snapshot runs the OCR deadly-task
     # poller — the actual daemon-killer on HW. Assert it streamed real state

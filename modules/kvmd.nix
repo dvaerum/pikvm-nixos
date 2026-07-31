@@ -179,7 +179,14 @@ let
     builtins.toJSON {
       kvmd = {
         info = {
-          extras = "${kvmd}/share/kvmd/extras";
+          # Advertise only the extras whose backing daemon we actually run.
+          # kvmd's stock extras are ipmi + vnc, whose daemons (kvmd-ipmi /
+          # kvmd-vnc) we don't package — pointing info.extras at kvmd's raw dir
+          # would advertise them in /api/info and make the dashboard query dead
+          # services (DBusError). kvmd-extras filters those out (empty today).
+          # When the web Terminal is on, webterm.nix overrides this with the
+          # composed extrasDir (kvmd-extras ∪ webterm) via 10-settings.
+          extras = "${pkgs.pikvm.kvmd-extras}";
           hw = {
             platform = platformIdPath;
             vcgencmd_cmd = [ (lib.getExe' pkgs.libraspberrypi "vcgencmd") ];

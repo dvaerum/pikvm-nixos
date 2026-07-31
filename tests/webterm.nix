@@ -57,9 +57,27 @@
     A = "-u alice:secretpw"
 
     # (1) kvmd registers the webterm extra → the dashboard renders the button.
-    # kvmd reads kvmd.info.extras (our composed extrasDir) and reports it on /api/info.
+    # kvmd reads kvmd.info.extras (our composed extrasDir) and reports it on
+    # /api/info. Assert the EXACT advertised set is {webterm}: webterm present
+    # AND the stock ipmi/vnc extras filtered out (their kvmd-ipmi/kvmd-vnc
+    # daemons aren't packaged → advertising them = a DBusError on every
+    # /api/info). This is the composed extrasDir = kvmd-extras (∅) ∪ webterm.
+    import json
     info = machine.succeed(f"curl -sk {A} 'https://localhost/api/info?fields=extras'")
-    assert "webterm" in info, f"kvmd must report the webterm extra; got: {info!r}"
+    extras = json.loads(info)["result"]["extras"]
+    assert set(extras.keys()) == {"webterm"}, \
+        f"advertised extras must be EXACTLY {{webterm}} (ipmi/vnc filtered); got {sorted(extras.keys())}"
+
+    # (1b) nginx -t must still pass with the new extrasDir join (georgs ASK 2) —
+    # belt-and-suspenders that the extras/*/nginx.ctx-*.conf include glob still
+    # resolves the webterm ctx files through the filtered composition. (Steps
+    # 2/3 below already prove the glob ACTIVATES webterm — 200 through ttyd —
+    # but validate the config explicitly too.)
+    import re
+    execstart = machine.succeed("systemctl cat nginx.service | grep -m1 -oE 'ExecStart=.*'")
+    m = re.search(r"ExecStart=(\S+).* -c (\S+)", execstart)
+    assert m, f"couldn't parse nginx ExecStart: {execstart!r}"
+    machine.succeed(f"{m.group(1)} -t -c {m.group(2)}")
 
     # (2) The ttyd proxy inherits the server-level auth_request — WITHOUT creds it is
     # refused / redirected to login (NOT open to the internet).

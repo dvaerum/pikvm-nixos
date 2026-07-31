@@ -20,6 +20,11 @@ in
     xlib = pythonPackages.xlib or pythonPackages.python-xlib;
   };
 
+  # The kvmd extras we actually advertise (kvmd's extras minus the ones whose
+  # daemon we don't package — ipmi/vnc). Consumed by the kvmd module's base
+  # info.extras and by kvmd-webterm's composed extrasDir.
+  kvmd-extras = scope.callPackage ./kvmd-extras { };
+
   # PiKVM web Terminal static artifacts (ttyd). `kvmd` resolves from this scope;
   # `ttyd` from nixpkgs. Exposes passthru.{extrasDir,webDir,ttyd} for the module.
   kvmd-webterm = scope.callPackage ./kvmd-webterm { };

@@ -59,6 +59,19 @@
   libxkbcommon,
   tesseract,
 }:
+let
+  # kvmd's OCR (kvmd/apps/kvmd/ocr.py) both dlopens libtesseract AND, at
+  # runtime, os.listdir()s a tessdata language dir (ocr.tessdata). kvmd's
+  # ocr.langs default is ["eng"] (stock PiKVM's recognition language); we add
+  # `osd` (orientation/script detection, a standard companion, ~10 MB) so the
+  # set is eng+osd. The nixpkgs default `tesseract` instead bundles ALL ~130
+  # languages, dragging a ~1.1 GiB tessdata closure into the appliance image;
+  # restricting keeps the image small. We expose this exact package
+  # (passthru.tesseract) so the NixOS module can point ocr.tessdata at the SAME
+  # store path whose libtesseract.so.5 we link below (lib + language data stay
+  # version-matched).
+  tesseractOcr = tesseract.override { enableLanguages = [ "eng" "osd" ]; };
+in
 buildPythonApplication rec {
   pname = "kvmd";
   version = "4.188";
@@ -173,10 +186,14 @@ buildPythonApplication rec {
     substituteInPlace kvmd/keyboard/printer.py \
       --replace-fail 'ctypes.util.find_library("xkbcommon")' '"${lib.getLib libxkbcommon}/lib/libxkbcommon.so.0"'
     substituteInPlace kvmd/apps/kvmd/ocr.py \
-      --replace-fail 'ctypes.util.find_library("tesseract")' '"${lib.getLib tesseract}/lib/libtesseract.so.5"'
+      --replace-fail 'ctypes.util.find_library("tesseract")' '"${lib.getLib tesseractOcr}/lib/libtesseract.so.5"'
   '';
 
   pythonImportsCheck = [ "kvmd" ];
+
+  # The eng+osd tesseract kvmd links + reads tessdata from; the NixOS module
+  # points ocr.tessdata at ${kvmd.tesseract}/share/tessdata (same store path).
+  passthru.tesseract = tesseractOcr;
 
   meta = {
     homepage = "https://github.com/pikvm/kvmd";

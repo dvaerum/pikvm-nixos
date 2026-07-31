@@ -198,7 +198,11 @@ in
       virtualHosts."pikvm" = {
         serverName = cfg.serverName;
         default = true;
-        addSSL = true;
+        # forceSSL (not addSSL) so plain :80 gets a stock-faithful redirect
+        # server — `return 301 https://$host$request_uri;` — instead of serving
+        # the dashboard over http. Matches kvmd's nginx.conf.mako :80 block
+        # (the https_enabled branch); addSSL served both 80 and 443 with no bounce.
+        forceSSL = true;
         sslCertificate = certFile;
         sslCertificateKey = keyFile;
 
@@ -250,6 +254,10 @@ in
       '';
     };
 
-    networking.firewall.allowedTCPPorts = [ 443 ];
+    # 80 for the http→https redirect server (forceSSL), 443 for the dashboard.
+    networking.firewall.allowedTCPPorts = [
+      80
+      443
+    ];
   };
 }

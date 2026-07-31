@@ -113,6 +113,14 @@ spare card (or the build node hands over a prepared card).
   (`services.pikvm.web.tls.*` → a runtime secret).
 - **MCP `passwordFile`** — user-provided; **sops-nix not wired yet**. Only
   relevant once the AI-agent stack (held PR #17) is enabled.
+- **Applying kvmd config changes** — a change to `services.pikvm.kvmd.settings`
+  rewrites kvmd's declarative config but does **not** change the kvmd package, so
+  `restartTriggers` on `kvmd`/`kvmd-media` make `nixos-rebuild switch` restart
+  those daemons to pick it up (kvmd reads its config only at startup — no
+  SIGHUP/reload). **The restart drops active kvmd sessions** (a brief reconnect) —
+  the accepted tradeoff vs a config change silently not applying. `kvmd-otg` is
+  deliberately excluded: restarting the gadget under a live kvmd would invalidate
+  its HID devices, so OTG/HID-affecting config changes still need a reboot.
 
 ## 4. First-boot risks (never validated off QEMU)
 

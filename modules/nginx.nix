@@ -69,6 +69,12 @@ let
   needsSelfSigned = cfg.tls.certificate == null || cfg.tls.certificateKey == null;
 in
 {
+  # The web Terminal is part of the web front-door: own its module here so the
+  # services.pikvm.web.terminal option is declared for ANY nginx consumer
+  # (the appliance AND tests that import nginx.nix alone, e.g. tests/mcp-proxy.nix
+  # which references cfg.terminal via the config below).
+  imports = [ ./webterm.nix ];
+
   options.services.pikvm.web = {
     # DEFAULT-ON, like stock PiKVM (the box is a web KVM out of the box). Set to
     # false to keep the appliance SSH-only (a hardened, headless deployment).

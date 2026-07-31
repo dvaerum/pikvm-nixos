@@ -10,7 +10,7 @@
     ./nginx.nix
     ./hid-recovery.nix
     ./hid-recovery-endpoint.nix
-    ./webterm.nix
+    # ./webterm.nix is imported by ./nginx.nix (the web front-door owns it).
   ];
 
   # Make the PiKVM package scope (`pkgs.pikvm.*`) available to every module

@@ -92,6 +92,31 @@ fallback** — the dashboard works without it, at higher bandwidth/latency.
 **Effort HIGH / Risk HIGH** (packaging Janus + the PiKVM plugin + HW-H.264 on
 the Pi is the least-certain piece). Deferred; note as future work.
 
+### HW / browser evidence (pikvm-nixos@it-03400, real Pi4B, 2026-07-31)
+
+The shipped `ustreamer 6.61` is built **`WITH_JANUS=0`** (also `WITH_V4P=0`,
+`WITH_GPIO=1`), and it's now confirmed **client-visible on every `/kvm/` load**,
+not just a build-flag fact. In Firefox on the live appliance:
+
+```
+[ERROR] Loading module from ".../share/js/kvm/janus.js" blocked — disallowed MIME type ("text/html")
+[WARN ] Loading failed for the module ".../janus.js" @ .../stream_janus.js
+[WARN ] Cannot play media. No decoders for video/mp4; codecs="avc1.42E01F"
+```
+Wire: `GET /share/js/kvm/janus.js` → **404 `content-type: text/html`**;
+`GET /api/streamer` → `features.h264: false`.
+
+Two separable items when this unparks:
+1. **The real gap (this phase):** no Janus ⇒ no WebRTC ⇒ MJPEG-only. `pkgs/ustreamer`
+   needs `WITH_JANUS=1` + Janus packaging (the plugin, `kvmd-janus`, HW-H.264).
+2. **A cosmetic nit (leave as-is for faithfulness):** stock `stream_janus.js`
+   unconditionally imports `janus.js`, so the dashboard always attempts WebRTC and
+   404s; nginx returns an HTML error body, so Firefox logs a red console *error*
+   (not a quiet 404) on every load. Harmless (falls back to MJPEG). Do NOT suppress
+   it — that would diverge from stock PiKVM, and faithfulness is the rule; this note
+   exists so the red-error-on-the-main-page question is one lookup, not an
+   investigation.
+
 ## Phase 4 — forkable-override (cross-cutting, LOW)
 
 Applied within every phase: `common.nix` keeps the faithful stock defaults;

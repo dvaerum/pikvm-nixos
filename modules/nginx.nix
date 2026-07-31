@@ -30,6 +30,15 @@ let
   kvmd = config.services.pikvm.kvmd.package;
   stockNginx = "${kvmd}/share/kvmd/configs.default/nginx";
 
+  # Web Terminal (Phase 2.5, kvmd-webterm): when services.pikvm.web.terminal is
+  # on, serve the COMPOSED web root (kvmd UI ∪ the webterm menu icon) and let
+  # webterm self-register its nginx via the extras glob-include — exactly how
+  # kvmd's own nginx.conf.mako wires extras. Among the extras only webterm ships
+  # nginx.ctx-*.conf, so the glob activates only it.
+  terminalEnabled = cfg.terminal.enable;
+  webterm = pkgs.pikvm.kvmd-webterm;
+  webRoot = if terminalEnabled then webterm.webDir else "${kvmd}/share/kvmd/web";
+
   # The stock server-context config, path-patched: the ONLY Arch path that must
   # change is the static web root (/usr/share/kvmd → the package). The unix-socket
   # upstreams (/run/kvmd/*), the /etc/kvmd/nginx/* includes, /etc/kvmd/web.css and
@@ -38,6 +47,7 @@ let
   # host without realising the aarch64 kvmd closure.)
   serverConf = pkgs.runCommand "kvmd-nginx-server.conf" { } ''
     substitute ${stockNginx}/kvmd.ctx-server.conf "$out" \
+      --replace-quiet /usr/share/kvmd/web ${webRoot} \
       --replace-quiet /usr/share/kvmd ${kvmd}/share/kvmd
   '';
 
@@ -176,6 +186,7 @@ in
       # it evals without realising the kvmd closure.
       appendHttpConfig = ''
         include ${stockNginx}/kvmd.ctx-http.conf;
+        ${lib.optionalString terminalEnabled "include ${webterm.extrasDir}/*/nginx.ctx-http.conf;"}
       '';
 
       virtualHosts."pikvm" = {
@@ -189,6 +200,7 @@ in
         # redfish + auth_request), path-patched, plus our /mcp endpoint.
         extraConfig = ''
           include ${serverConf};
+          ${lib.optionalString terminalEnabled "include ${webterm.extrasDir}/*/nginx.ctx-server.conf;"}
 
           # MCP Streamable-HTTP endpoint (built-in). The MCP self-authenticates
           # (security = "kvmd") so skip nginx auth_request; its responses stream

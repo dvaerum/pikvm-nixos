@@ -26,34 +26,26 @@
 Secondary (don't block the build): PiKVM HAT present? (OLED/ATX/fan); current
 boot medium + size.
 
-## 🔴 Known issue (P0, TEMPORARY — delete when fixed): the OTG gadget fails to bind → keyboard/mouse/MSD non-functional
+## OTG gadget bind (resolved 2026-07-31)
 
-On the current appliance the USB OTG gadget **never fully binds.** `kvmd-otg`
-unconditionally writes `…/functions/mass_storage.usb0/lun.0/inquiry_string_cdrom`,
-an attribute the Pi vendor kernel (6.18.34) does **not** expose → `EACCES` → gadget
-assembly aborts **before** the UDC bind. Result: the UDC is empty, `/dev/kvmd-hid-*`
-are missing, and `/api/hid` reports `keyboard.online=false` / `mouse.online=false`.
+Earlier the USB OTG gadget assembly was aborting on a missing configfs attribute, so
+the gadget never bound and keyboard/mouse/MSD were non-functional since first boot.
+`kvmd-otg`'s `add_msd()` wrote
+`…/functions/mass_storage.usb0/lun.0/inquiry_string_cdrom`, a PiKVM-kernel-patch
+attribute the Pi vendor kernel (6.18.34) does **not** expose → `EACCES` aborted
+assembly **before** the UDC bind, leaving the UDC empty and `/dev/kvmd-hid-*` missing.
 
-**⇒ The emulated keyboard, mouse, and Mass Storage to the target are
-NON-FUNCTIONAL** — and have been since the first boot. So the dashboard / `/mcp`
-KVM-control path can't drive a target's HID or mount media yet (video/MJPEG is
-unaffected).
+**Fixed** by giving that write `optional=True` (`pkgs/kvmd`, the same pattern kvmd
+already uses for other kernel-version-dependent attrs like `no_out_endpoint`) so
+assembly skips the absent attribute and reaches the UDC bind. HW-confirmed on the real
+appliance: `UDC=[fe980000.usb]` (was `[]`), `/dev/kvmd-hid-{keyboard,mouse,mouse-alt}`
+present, `mass_storage` linked into config `c.1`, `kvmd-otg` genuinely active, zero
+`Missing HID-*` errors, `mouse.outputs.available` `[]`→`[usb,usb_rel]`.
 
-- **`systemctl status kvmd-otg` may show `active` — that is a FALSE green** (a
-  partially-assembled gadget). Don't trust the unit state; check `/api/hid`
-  (`keyboard.online`/`mouse.online`) and `/sys/class/udc/*/state`.
-- **A reboot does NOT fix it** — it fails identically on every boot.
-- A kvmd-package-changing `nixos-rebuild switch` also surfaces it as a non-zero
-  (`4/NOPERMISSION`) exit from `switch-to-configuration`; the *system* update still
-  succeeds, but HID/MSD remain dead.
-
-Known **P0**, fix in progress (stop kvmd writing the kernel-absent attribute / make
-the MSD cdrom-inquiry conditional so the gadget binds). **Remove this whole section
-once the fix lands and is HW-confirmed** (gadget binds; `keyboard.online`/
-`mouse.online` = true). Until then, **HID/MSD end-to-end can't be validated on a
-cabled target** — the OTG-target cabling step is on hold behind this fix.
-(Root-caused 2026-07-31 by the real-HW node; pre-existing since first boot, not a
-regression.)
+`keyboard.online`/`mouse.online` still read `false` on the uncabled bench: binding is
+not enumeration — those flip `true` only once a **target host** enumerates the gadget
+over the OTG cable. So HID and MSD end-to-end are validated at the OTG-target cabling
+step, not on the bench.
 
 ## 1. Build the image and flash a spare medium
 

@@ -51,12 +51,18 @@ in
       # No self-updates inside the test VM.
       services.pikvm.autoUpgrade.enable = false;
 
-      # Disable the two subsystems that need Pi hardware the generic VM kernel
-      # lacks, or kvmd's on_startup crash-loops: msd.type=otg writes the vendor
-      # configfs attr inquiry_string_cdrom (EACCES here), atx.type=gpio opens
-      # /dev/gpiochip0 (absent → FileNotFoundError). The appliance keeps both.
+      # atx.type=gpio opens /dev/gpiochip0 (absent in the VM → FileNotFoundError),
+      # so disable it. msd.type=otg is KEPT ENABLED (the appliance default): its
+      # gadget-assembly path writes the mass-storage lun attr inquiry_string_cdrom,
+      # which is a PiKVM-kernel patch the vendor kernel (6.18.34) AND the generic
+      # VM kernel both lack — so this is exactly where the real OTG-dead bug lives,
+      # and enabling msd here reproduces it (see the OTG-bind assertions below).
+      #
+      # ⚠️ LOAD-BEARING: do NOT set msd.type = "disabled" here. The OTG-bind guard
+      # below only exercises the inquiry_string_cdrom path because add_msd() runs,
+      # which requires msd enabled. Disabling msd silently vacuums that guard
+      # (no mass_storage function ⇒ the failing write never happens).
       services.pikvm.kvmd.settings.kvmd = {
-        msd.type = "disabled";
         atx.type = "disabled";
       };
 
@@ -114,16 +120,33 @@ in
 
     # --- kvmd-otg: the port bugs must be gone ----------------------------
     # kvmd-otg now parses --main-config correctly (not the Arch
-    # /usr/lib/kvmd/main.yaml default) and loads libc, and gets as far as
-    # assembling the USB gadget in configfs. Full gadget bring-up needs the Pi
-    # vendor kernel's OTG/MSD configfs support (e.g. inquiry_string_cdrom),
-    # which a generic VM kernel lacks — so we assert the two port-bug
-    # signatures are gone rather than requiring the unit to reach active.
+    # /usr/lib/kvmd/main.yaml default) and loads libc, and assembles the USB
+    # gadget in configfs.
     otg_log = machine.execute("journalctl -u kvmd-otg.service --no-pager")[1]
     assert "invalid wrapper value" not in otg_log, \
         "regression: kvmd-otg fell back to the /usr/lib/kvmd/main.yaml default"
     assert "Where is libc" not in otg_log, \
         "regression: kvmd.libc could not load libc"
+
+    # --- the OTG gadget must actually BIND (with MSD enabled) ------------
+    # With msd.type=otg (the appliance default, enabled above), add_msd() writes
+    # the mass-storage lun attr inquiry_string_cdrom — a PiKVM-kernel patch the
+    # vendor kernel 6.18.34 AND this generic VM kernel both lack. configfs
+    # returns EACCES (not ENOENT) for a missing attr, so the unguarded write
+    # ABORTS assembly BEFORE the UDC bind → the gadget never binds → HID/MSD are
+    # dead while systemd still reports the unit active (a false green — the exact
+    # trap it-03400 caught on HW). Making that write optional=True (pkgs/kvmd)
+    # lets assembly skip the absent attr and reach the UDC bind. So assert the
+    # gadget is genuinely BOUND (UDC non-empty) and the MSD function is present
+    # AND linked into the config — not merely that the unit is "active". Without
+    # the fix this section fails (no bind / PermissionError), so it can fail.
+    gadget = "/sys/kernel/config/usb_gadget/kvmd"
+    assert "PermissionError" not in otg_log, \
+        f"kvmd-otg assembly hit PermissionError (inquiry_string_cdrom?):\n{otg_log}"
+    machine.wait_until_succeeds(f"test -s {gadget}/UDC", timeout=15)
+    print("bound UDC: " + machine.succeed(f"cat {gadget}/UDC"))
+    machine.succeed(f"test -d {gadget}/functions/mass_storage.usb0")
+    machine.succeed(f"test -e {gadget}/configs/c.1/mass_storage.usb0")
 
     # --- lazily-dlopened native libs must resolve ------------------------
     # Regression guard for the find_library(...)->None fixes. On a stock

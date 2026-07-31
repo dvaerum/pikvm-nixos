@@ -187,6 +187,24 @@ buildPythonApplication rec {
       --replace-fail 'ctypes.util.find_library("xkbcommon")' '"${lib.getLib libxkbcommon}/lib/libxkbcommon.so.0"'
     substituteInPlace kvmd/apps/kvmd/ocr.py \
       --replace-fail 'ctypes.util.find_library("tesseract")' '"${lib.getLib tesseractOcr}/lib/libtesseract.so.5"'
+
+    # kvmd-otg's add_msd() unconditionally writes the mass-storage lun attribute
+    # `inquiry_string_cdrom`, which is a PiKVM-kernel patch NOT present in the
+    # nixos-raspberrypi vendor kernel (nor a generic kernel). configfs returns
+    # EACCES (not ENOENT) when opening a non-existent attribute for writing, so
+    # this surfaces as PermissionError [Errno 13] and ABORTS gadget assembly
+    # before the UDC is bound → the OTG gadget never binds → HID/MSD are dead
+    # (no /dev/kvmd-hid-*, keyboard/mouse online=false), independent of cabling.
+    # kvmd already guards other kernel-version-dependent attrs (no_out_endpoint,
+    # wakeup_on_write) with optional=True; give inquiry_string_cdrom the same
+    # treatment so assembly skips it when absent and proceeds to the UDC bind.
+    # (`inquiry_string` — the flash-mode string — DOES exist, so it stays
+    # mandatory.) The only effect of skipping is that CDROM-mode MSD uses the
+    # default SCSI inquiry string rather than a cdrom-specific one — cosmetic.
+    substituteInPlace kvmd/apps/otg/__init__.py \
+      --replace-fail \
+        '_write(join(func_path, "lun.0/inquiry_string_cdrom"), inquiry_string_cdrom)' \
+        '_write(join(func_path, "lun.0/inquiry_string_cdrom"), inquiry_string_cdrom, optional=True)'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

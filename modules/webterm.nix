@@ -96,13 +96,13 @@ in
       };
     };
 
-    # TODO (integrate once @nixos-developer-system lands the composed webterm
-    # extras dir + ttyd/icon attrs): to actually light up the button we still
-    # need — replicating kvmd's own nginx.conf.mako extras glob-include —
-    #   services.nginx.appendHttpConfig  += include <extras>/*/nginx.ctx-http.conf;   (ttyd upstream)
-    #   virtualHosts."pikvm".extraConfig += include <extras>/*/nginx.ctx-server.conf; (/extras/webterm/ttyd location)
-    #   services.pikvm.kvmd.settings.kvmd.info.extras = <composed extras dir>;        (so kvmd reports state.webterm)
-    #   serve the web icon at web-root extras/webterm/terminal.svg
-    # These land in the follow-up commit against the peer's package attrs.
+    # Point kvmd's extras scanner at the COMPOSED dir (kvmd's ipmi/vnc ∪ webterm)
+    # so ExtrasInfoSubmanager finds share/kvmd/extras/webterm/manifest.yaml and
+    # reports state.webterm → the UI renders the "• Term" button. This 10-settings
+    # freeform value overrides the 00-nixos-paths default in modules/kvmd.nix
+    # (extras = ${kvmd}/share/kvmd/extras) without touching that file. The nginx
+    # web-root + extras glob-includes that serve the icon and the /extras/webterm/
+    # ttyd location live in modules/nginx.nix (gated on the same option).
+    services.pikvm.kvmd.settings.kvmd.info.extras = "${pkgs.pikvm.kvmd-webterm.extrasDir}";
   };
 }

@@ -19,4 +19,8 @@ in
     # kvmd builds regardless of which nixpkgs the consuming system uses.
     xlib = pythonPackages.xlib or pythonPackages.python-xlib;
   };
+
+  # PiKVM web Terminal static artifacts (ttyd). `kvmd` resolves from this scope;
+  # `ttyd` from nixpkgs. Exposes passthru.{extrasDir,webDir,ttyd} for the module.
+  kvmd-webterm = scope.callPackage ./kvmd-webterm { };
 }

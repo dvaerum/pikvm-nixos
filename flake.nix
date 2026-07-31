@@ -103,6 +103,9 @@
           mcp-hid-recovery-env = pkgs.testers.runNixOSTest (
             import ./tests/mcp-hid-recovery-env.nix { inherit self pkgs; }
           );
+          webterm = pkgs.testers.runNixOSTest (
+            import ./tests/webterm.nix { inherit self pkgs; }
+          );
         }
       );
 

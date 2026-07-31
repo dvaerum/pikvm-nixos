@@ -106,6 +106,9 @@
           webterm = pkgs.testers.runNixOSTest (
             import ./tests/webterm.nix { inherit self pkgs; }
           );
+          http-redirect = pkgs.testers.runNixOSTest (
+            import ./tests/http-redirect.nix { inherit self pkgs; }
+          );
         }
       );
 

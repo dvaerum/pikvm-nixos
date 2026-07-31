@@ -117,6 +117,33 @@ in
         assert "10-settings.yaml" in triggers and "00-nixos-paths.yaml" in triggers, \
             f"{svc}: restartTriggers must include the declarative config:\n{triggers}"
 
+    # --- MSD/PST remount privilege wiring (least-priv, mirrors stock) -----
+    # kvmd flips the virtual-drive storage RW via `sudo kvmd-helper-*-remount`;
+    # the Arch defaults (/usr/bin/sudo + /usr/bin/kvmd-helper-*) don't exist on
+    # NixOS. Assert the config points at the sudo wrapper + the shipped helper,
+    # the helpers exist, and the sudoers grant is present AND SCOPED (kvmd may
+    # run ONLY the otgmsd helper, NOPASSWD, nothing broader). The ACTUAL remount
+    # needs an fstab-marked MSD partition + a cabled target → HW-verified
+    # separately; this guards the privilege+path wiring, which IS VM-observable.
+    import json
+    kvmd_pkg = "${pkgs.pikvm.kvmd}"
+    machine.succeed(f"test -x {kvmd_pkg}/bin/kvmd-helper-otgmsd-remount")
+    machine.succeed(f"test -x {kvmd_pkg}/bin/kvmd-helper-pst-remount")
+    npaths = machine.succeed("cat /etc/kvmd/override.d/00-nixos-paths.yaml")
+    assert "/usr/bin/sudo" not in npaths and "/usr/bin/kvmd-helper" not in npaths, \
+        f"Arch remount paths leaked into the override:\n{npaths}"
+    rcmd = json.loads(npaths)["kvmd"]["msd"]["remount_cmd"]
+    assert rcmd == ["/run/wrappers/bin/sudo", "--non-interactive",
+                    f"{kvmd_pkg}/bin/kvmd-helper-otgmsd-remount", "{mode}"], \
+        f"msd.remount_cmd not rewritten to the sudo wrapper + shipped helper: {rcmd}"
+    # sudoers: kvmd may run EXACTLY the otgmsd helper (NOPASSWD), nothing broader.
+    sudo_kvmd = machine.succeed("sudo -l -U kvmd")
+    assert "kvmd-helper-otgmsd-remount" in sudo_kvmd and "NOPASSWD" in sudo_kvmd, \
+        f"kvmd missing the least-priv remount sudoers grant:\n{sudo_kvmd}"
+    cmd_lines = [l for l in sudo_kvmd.splitlines() if "NOPASSWD" in l or ") ALL" in l]
+    assert len(cmd_lines) == 1 and "kvmd-helper-otgmsd-remount" in cmd_lines[0], \
+        f"kvmd sudo grant is not scoped to only the remount helper:\n{sudo_kvmd}"
+
     # --- the daemons actually run ----------------------------------------
     # (Regression guard: kvmd/kvmd-media must find the `ustreamer` python
     # module and load libc. They order after network-online, so wait for them.)

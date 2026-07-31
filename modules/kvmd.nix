@@ -208,6 +208,29 @@ let
           pre_start_cmd = [ (lib.getExe' pkgs.coreutils "true") "pre-start" ];
           post_stop_cmd = [ (lib.getExe' pkgs.coreutils "true") "post-stop" ];
         };
+        # kvmd's MSD/PST read-write remount runs `sudo … kvmd-helper-*-remount`
+        # to remount the virtual-drive storage RW/RO, defaulting to the Arch
+        # absolutes /usr/bin/sudo + /usr/bin/kvmd-helper-*-remount — neither of
+        # which exists on NixOS, so a RW remount would fail. Point both at the
+        # NixOS setuid sudo wrapper + the helper kvmd actually ships; the matching
+        # least-privilege sudoers rules (mirroring stock's os/sudoers) are granted
+        # in the config below. msd.remount_cmd is the LIVE MSD-RW path (run by the
+        # kvmd user); pst.remount_cmd is currently inert (we run no kvmd-pst
+        # service) but rewritten for faithfulness. (The helper's own hardcoded
+        # /bin/mount is fixed in pkgs/kvmd.) The actual remount also needs an
+        # fstab-marked MSD partition + a cabled target — HW-verified separately.
+        msd.remount_cmd = [
+          "/run/wrappers/bin/sudo"
+          "--non-interactive"
+          "${kvmd}/bin/kvmd-helper-otgmsd-remount"
+          "{mode}"
+        ];
+        pst.remount_cmd = [
+          "/run/wrappers/bin/sudo"
+          "--non-interactive"
+          "${kvmd}/bin/kvmd-helper-pst-remount"
+          "{mode}"
+        ];
       };
     }
   );
@@ -368,6 +391,39 @@ in
       extraGroups = kvmdUserExtraGroups.${name} or [ ];
       description = "PiKVM ${name}";
     });
+
+    # --- MSD/PST remount privilege (mirrors stock PiKVM's os/sudoers) ------
+    # kvmd runs `sudo … kvmd-helper-*-remount rw|ro` to flip the virtual-drive
+    # storage read-write for image writes. Grant EXACTLY that — the kvmd user may
+    # run ONLY the otgmsd-remount helper, kvmd-pst ONLY the pst-remount helper —
+    # passwordless (the remount is unattended), as root, and nothing else. Stock:
+    #   kvmd     ALL=(ALL) NOPASSWD: /usr/bin/kvmd-helper-otgmsd-remount
+    #   kvmd-pst ALL=(ALL) NOPASSWD: /usr/bin/kvmd-helper-pst-remount
+    # The remount_cmd paths (00-nixos-paths above) point at these same helpers +
+    # the setuid sudo wrapper. kvmd-pst's rule is inert today (we run no kvmd-pst
+    # service) but kept for faithfulness.
+    security.sudo.extraRules = [
+      {
+        users = [ "kvmd" ];
+        runAs = "ALL";
+        commands = [
+          {
+            command = "${kvmd}/bin/kvmd-helper-otgmsd-remount";
+            options = [ "NOPASSWD" ];
+          }
+        ];
+      }
+      {
+        users = [ "kvmd-pst" ];
+        runAs = "ALL";
+        commands = [
+          {
+            command = "${kvmd}/bin/kvmd-helper-pst-remount";
+            options = [ "NOPASSWD" ];
+          }
+        ];
+      }
+    ];
 
     # --- Runtime dirs & seeded mutable state ------------------------------
     systemd.tmpfiles.rules = [

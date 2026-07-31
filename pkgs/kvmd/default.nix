@@ -58,6 +58,7 @@
   # translation, keyboard paste), tesseract (OCR of the captured screen).
   libxkbcommon,
   tesseract,
+  util-linux, # `mount` for the MSD/PST remount helper (kvmd hardcodes /bin/mount)
 }:
 let
   # kvmd's OCR (kvmd/apps/kvmd/ocr.py) both dlopens libtesseract AND, at
@@ -205,6 +206,13 @@ buildPythonApplication rec {
       --replace-fail \
         '_write(join(func_path, "lun.0/inquiry_string_cdrom"), inquiry_string_cdrom)' \
         '_write(join(func_path, "lun.0/inquiry_string_cdrom"), inquiry_string_cdrom, optional=True)'
+
+    # The MSD/PST remount helper (kvmd.helpers.remount, run as root via sudo to
+    # remount the virtual-drive storage RW/RO) hardcodes /bin/mount, which does
+    # not exist on NixOS (/bin has only sh) → a RW remount would fail. Point it
+    # at util-linux's mount (root-invoked, so the plain binary is fine).
+    substituteInPlace kvmd/helpers/remount/__init__.py \
+      --replace-fail '"/bin/mount"' '"${lib.getExe' util-linux "mount"}"'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

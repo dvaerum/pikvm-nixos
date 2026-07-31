@@ -14,6 +14,25 @@
 # modules need are already present because flake.nix calls runNixOSTest on a
 # pkgs set that carries the overlay, and nodes inherit it as their hostPkgs.
 { self, pkgs }:
+let
+  # A tiny stream-WS client used by the OCR crash-path guard: it opens the SAME
+  # ws?stream=1 the KVM dashboard opens (over kvmd's unix socket, authed the
+  # reliable header way) and prints the first event kvmd pushes. Connecting
+  # makes kvmd run its initial-state snapshot, which drives the OCR deadly-task
+  # poller (get_state -> get_available_langs) — the exact daemon-killer on HW.
+  ocrWsProbe = pkgs.writeText "ocr-ws-probe.py" ''
+    import asyncio, sys, aiohttp
+    async def main():
+        conn = aiohttp.UnixConnector(path="/run/kvmd/kvmd.sock")
+        hdr = {"X-KVMD-User": "admin", "X-KVMD-Passwd": "admin"}
+        async with aiohttp.ClientSession(connector=conn, headers=hdr) as s:
+            async with s.ws_connect("http://localhost/ws?stream=1") as ws:
+                msg = await asyncio.wait_for(ws.receive(), timeout=10)
+                sys.stdout.write(str(msg.data)[:300])
+    asyncio.run(main())
+  '';
+  pyWs = pkgs.python3.withPackages (p: [ p.aiohttp ]);
+in
 {
   name = "pikvm-kvmd-services";
 
@@ -123,8 +142,66 @@
         "${pkgs.python3}/bin/python3 -c '"
         'import ctypes; '
         'ctypes.CDLL("${pkgs.lib.getLib pkgs.libxkbcommon}/lib/libxkbcommon.so.0"); '
-        'ctypes.CDLL("${pkgs.lib.getLib pkgs.tesseract}/lib/libtesseract.so.5")'
+        'ctypes.CDLL("${pkgs.lib.getLib pkgs.pikvm.kvmd.tesseract}/lib/libtesseract.so.5")'
         "'"
     )
+
+    # --- OCR data dir must resolve (tessdata Arch-ism regression) ---------
+    # kvmd's ocr.tessdata defaulted to the Arch /usr/share/tessdata, absent on
+    # NixOS. Enumerating languages (get_available_langs -> os.listdir) then
+    # raised FileNotFoundError inside the OCR poller — a kvmd "deadly task" —
+    # so kvmd crash-looped on every KVM-page open (deterministic HW repro).
+    # The dlopen check above proves the *library* loads; it says nothing about
+    # the *data dir*, which is what broke, and nothing in the suite ever drove
+    # the OCR poll path (poll_state -> get_state -> get_available_langs) — which
+    # is exactly why all checks were green while real HW crash-looped.
+    #
+    # Baseline the SOUND death signal BEFORE driving OCR: kvmd's MainPID, which
+    # changes iff the main process actually died+respawned. (NRestarts is
+    # unsound — systemd zeroes it on its own across a start-limit window / a
+    # switch, so it can read 0 right after the very crash it should catch;
+    # measured on real HW. MainPID is the direct signal.)
+    pid_before = machine.succeed(
+        "systemctl show kvmd.service -p MainPID --value"
+    ).strip()
+
+    # (1) Functional guard: GET /streamer/ocr (authed on kvmd's own socket, no
+    # /api prefix) calls get_state -> get_available_langs directly. 200 + eng
+    # present proves BOTH that the path is rewritten AND that the tessdata
+    # actually carries a language — pointing it at an empty dir would 200 with
+    # [] here, so this assertion can genuinely fail.
+    import json
+    ocr = machine.succeed(
+        "${pkgs.curl}/bin/curl -s --unix-socket /run/kvmd/kvmd.sock"
+        " -H 'X-KVMD-User: admin' -H 'X-KVMD-Passwd: admin'"
+        " http://localhost/streamer/ocr"
+    )
+    print(ocr)
+    ocr_state = json.loads(ocr)["result"]["ocr"]
+    assert ocr_state["enabled"], f"OCR must be enabled (libtesseract linked): {ocr}"
+    assert "eng" in ocr_state["langs"]["available"], \
+        f"OCR tessdata must list English (dir rewritten + populated): {ocr}"
+
+    # (2) Crash-path guard: open the SAME stream WS the KVM dashboard opens
+    # (/ws?stream=1) so kvmd's initial-state snapshot runs the OCR deadly-task
+    # poller — the actual daemon-killer on HW. Assert it streamed real state
+    # (non-empty, so a failed upgrade fails loudly rather than passing vacuously).
+    ws = machine.succeed("${pyWs}/bin/python3 ${ocrWsProbe}")
+    print(ws[:500])
+    assert ws.strip(), "stream WS produced no events — upgrade/subscribe failed"
+
+    # (3) The daemon must have survived both the HTTP and the poller path:
+    # MainPID unchanged (and non-zero), and no crash line in the journal. On the
+    # broken build the poller kills kvmd here → MainPID changes (measured on HW:
+    # 21433 -> 21959 on a single stream WS), so this assertion genuinely fails.
+    pid_after = machine.succeed(
+        "systemctl show kvmd.service -p MainPID --value"
+    ).strip()
+    assert pid_after not in ("", "0") and pid_after == pid_before, \
+        f"kvmd MainPID changed {pid_before} -> {pid_after}: the daemon died driving OCR"
+    kvmd_log = machine.execute("journalctl -u kvmd.service --no-pager")[1]
+    assert "killing myself" not in kvmd_log, \
+        f"kvmd hit a deadly-task crash (OCR poller?):\n{kvmd_log}"
+    assert "tessdata" not in kvmd_log, f"tessdata error in kvmd journal:\n{kvmd_log}"
   '';
 }

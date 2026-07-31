@@ -146,8 +146,13 @@ let
     '';
   };
 
-  # Corrections for the /usr paths baked into kvmd's schema defaults. YAML is a
-  # superset of JSON, so toJSON is a valid override document.
+  # Corrections for the absolute /usr paths baked into kvmd's schema defaults
+  # (kvmd/apps/_scheme.py). YAML is a superset of JSON, so toJSON is a valid
+  # override document. NB: this override must stay COMPLETE against the scheme —
+  # a missed path is a latent FileNotFoundError that only surfaces when that
+  # code path first runs (ocr.tessdata below killed the daemon on every
+  # KVM-page open). A full _scheme.py path audit + the remaining unrewritten
+  # paths (e.g. the streamer's /bin/true hooks) land in a follow-up.
   nixosPaths = pkgs.writeText "00-nixos-paths.yaml" (
     builtins.toJSON {
       kvmd = {
@@ -159,6 +164,14 @@ let
           };
         };
         hid.keymap = "${kvmd}/share/kvmd/keymaps/en-us";
+        # kvmd's OCR data_dir defaults to the Arch path /usr/share/tessdata,
+        # absent on NixOS. get_available_langs() os.listdir()s it whenever OCR
+        # state is enumerated (every KVM-page open, via the stream poller) →
+        # FileNotFoundError kills the OCR "deadly task" and thus the whole
+        # daemon (surfaces to the user as "Unexpected logout"). Point it at the
+        # tessdata shipped by the exact tesseract kvmd links (eng+osd — see
+        # pkgs/kvmd; kvmd's ocr.langs default is eng).
+        ocr.tessdata = "${kvmd.tesseract}/share/tessdata";
       };
     }
   );

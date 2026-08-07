@@ -1,0 +1,226 @@
+{
+  "_README": [
+    "Expected ASSEMBLED-GADGET ground truth per OTG mouse mode.",
+    "",
+    "Keys are '<mode>/hw=<true|false>' because horizontal_wheel changes both",
+    "report_length and the descriptor bytes: the same logical mode has a",
+    "different correct answer on a rig with the wheel on than off. The test",
+    "appliance (10.10.132.110) runs hw=true; pikvm01 runs hw=false. A spec that",
+    "ignored this would go red on a perfectly correct box.",
+    "",
+    "An entry carrying a 'placeholder' field returns NOT-VERIFIED (exit 2), not",
+    "PASS. Modes are gated only once someone records what they should actually",
+    "look like. Green-because-nothing-was-compared is the failure mode this",
+    "table is shaped to prevent.",
+    "",
+    "'protocol'/'subclass' are USB HID interface fields, NOT descriptor content:",
+    "a change to them is invisible in the descriptor bytes. Both are asserted",
+    "separately for that reason.",
+    "",
+    "DO NOT DELETE THE protocol/subclass ASSERTIONS. There is a standing (and",
+    "correct) team warning that reads 'NEVER use proto/subclass' — it means",
+    "never use them as a STANDALONE MODE ORACLE, because the stock relative",
+    "maker already reads 2/1, so '2/1 therefore iPad' is a false positive. That",
+    "is a different claim from what this table does. Here they are per-named-",
+    "function, per-mode expectations: hid.usb1 must read 0/0 in desktop (it is",
+    "the absolute maker there) and 2/1 in ipad (the relative maker there). The",
+    "same slot changes maker between modes, which is exactly what makes the",
+    "fields informative. A descriptor hash cannot substitute: an absolute/",
+    "relative mix-up in the interface fields leaves the report descriptor",
+    "untouched, and that blind spot is what made a byte-compare the wrong tool",
+    "for the #51 dead-code question.",
+    "",
+    "Descriptor sha256 is over the bytes configfs actually returns for",
+    "report_desc (which reads short of its page-sized st_size).",
+    "",
+    "===================== PROVENANCE OF THE HASHES =====================",
+    "PINNED TO kvmd 4.188 (python3.14). The descriptor is a pure function of",
+    "(absolute, horizontal_wheel) FOR A GIVEN kvmd VERSION, so these values are",
+    "rig-independent but NOT version-independent. If kvmd is bumped, re-derive",
+    "before trusting them.",
+    "",
+    "ALL FOUR WERE COMPUTED LOCALLY on the appliance's own kvmd 4.188, by",
+    "importing the module the running unit actually resolves and calling",
+    "make_mouse_hid() across the four (absolute, horizontal_wheel) combinations.",
+    "NONE was transcribed from another rig. Re-derived 2026-08-07 and all four",
+    "reproduced identically.",
+    "",
+    "Independent confirmation differs PER ARM, and the difference matters when",
+    "diagnosing a surprise:",
+    "  abs/hw1 3a71a5a2 - computed AND matches this appliance's live configfs",
+    "                     (hid.usb1). Two sources.",
+    "  rel/hw1 92155ddf - computed AND matches this appliance's live configfs",
+    "                     (hid.usb2). Two sources.",
+    "  rel/hw0 55c045b2 - computed here AND matches pikvm01's live gadget, a",
+    "                     DIFFERENT kvmd tree (4.121, python3.13). Two sources",
+    "                     across two versions, so this arm is the best-evidenced",
+    "                     of the four and demonstrates the generator is stable",
+    "                     across 4.121<->4.188 for this combination.",
+    "  abs/hw0 d9b93f5a - computed ONLY. No rig in the fleet assembles an",
+    "                     absolute mouse with the wheel off, so there is no live",
+    "                     gadget anywhere to cross-check it against. This is the",
+    "                     single weakest pin in the table. Say so rather than",
+    "                     letting it inherit the others' credibility.",
+    "",
+    "A surprise on rel/hw0 should be read as 'the measurement is wrong', not",
+    "'the value is version-dependent' — byte-level evidence with a positive",
+    "control already says it is not."
+  ],
+
+  "modes": {
+    "_selftest-placeholder/hw=true": {
+      "placeholder": "PERMANENT TEST FIXTURE — not a real mode, never selected by anything. It exists so the NOT-VERIFIED path stays exercised forever. Once every real mode has expectations, the 'unspecced mode must not report green' guarantee would otherwise become untested, and an untested guarantee is one regression away from being false. Do not delete; do not fill in.",
+      "_never_delete": true
+    },
+
+    "stock-default/hw=true": {
+      "_provenance": [
+        "MEASURED on the appliance 2026-08-07, generation",
+        "51fzka7saj8hmagqqvmw8a138fcg0kng (main f6d8d70), kvmd 4.188, aarch64,",
+        "services.pikvm.kvmd.ipadCompat DISABLED.",
+        "The three descriptor hashes were independently reproduced by running",
+        "kvmd's own make_mouse_hid() under the interpreter the unit actually",
+        "uses, and matched the live configfs bytes exactly — so this table is",
+        "anchored to the kernel's view, not to a reading of the source."
+      ],
+      "require_udc_bound": true,
+      "functions": [
+        {
+          "name": "hid.usb0",
+          "_what": "keyboard",
+          "protocol": "1",
+          "subclass": "1",
+          "report_length": "8",
+          "desc_sha256": "5333cc3a23db1dd7a9e8303e2169a54a7070f69822fa503014834652c24410b6"
+        },
+        {
+          "name": "hid.usb1",
+          "_what": "primary mouse — ABSOLUTE, horizontal_wheel=true. protocol=0/subclass=0 is stock-unpatched; ipadCompat's postPatch would move these to 2/1, so this pair is what distinguishes patched from unpatched at runtime.",
+          "protocol": "0",
+          "subclass": "0",
+          "report_length": "7",
+          "desc_sha256": "3a71a5a23705ee80a711e143d1242e34cb5d85592d4b5e6ac3f20bf8b9830a12"
+        },
+        {
+          "name": "hid.usb2",
+          "_what": "alt mouse — RELATIVE, horizontal_wheel=true. protocol=2/subclass=1 is UPSTREAM STOCK for the relative maker, not evidence of any patch.",
+          "protocol": "2",
+          "subclass": "1",
+          "report_length": "5",
+          "desc_sha256": "92155ddf022d4091f5e15eea5871107cd6ff7a4e6ada0ef931bd14b86c5632d0"
+        }
+      ],
+      "hid_nodes": ["kvmd-hid-keyboard", "kvmd-hid-mouse", "kvmd-hid-mouse-alt"]
+    },
+
+    "desktop/hw=true": {
+      "_provenance": [
+        "Specced by pikvm-nixos@nixos-developer-system 2026-08-07: 'desktop'",
+        "is the stock shape — absolute primary mouse + relative alt, wheel on.",
+        "Byte-for-byte the same expectation as stock-default/hw=true above,",
+        "which was MEASURED on the appliance. Kept as a separate entry rather",
+        "than an alias so that if the two ever diverge the table says so out",
+        "loud instead of silently following one of them."
+      ],
+      "require_udc_bound": true,
+      "functions": [
+        {
+          "name": "hid.usb0",
+          "_what": "keyboard",
+          "protocol": "1",
+          "subclass": "1",
+          "report_length": "8",
+          "desc_sha256": "5333cc3a23db1dd7a9e8303e2169a54a7070f69822fa503014834652c24410b6"
+        },
+        {
+          "name": "hid.usb1",
+          "_what": "primary mouse — absolute, wheel on",
+          "protocol": "0",
+          "subclass": "0",
+          "report_length": "7",
+          "desc_sha256": "3a71a5a23705ee80a711e143d1242e34cb5d85592d4b5e6ac3f20bf8b9830a12"
+        },
+        {
+          "name": "hid.usb2",
+          "_what": "alt mouse — relative (kvmd gives the alt the INVERSE of mouse.absolute), wheel on",
+          "protocol": "2",
+          "subclass": "1",
+          "report_length": "5",
+          "desc_sha256": "92155ddf022d4091f5e15eea5871107cd6ff7a4e6ada0ef931bd14b86c5632d0"
+        }
+      ],
+      "hid_nodes": ["kvmd-hid-keyboard", "kvmd-hid-mouse", "kvmd-hid-mouse-alt"]
+    },
+
+    "ipad/hw=false": {
+      "_provenance": [
+        "Specced by pikvm-nixos@nixos-developer-system 2026-08-07 and VERIFIED",
+        "against kvmd 4.188 source on the appliance before being recorded:",
+        "  apps/otg/__init__.py __add_hid names functions 'hid.usb{instance}'",
+        "  from a sequential counter, so keyboard=usb0 and the primary mouse",
+        "  =usb1; the alt mouse is added ONLY under",
+        "  `if config.kvmd.hid.mouse_alt.device:`, so device=\"\" means no usb2.",
+        "  The primary mouse takes mouse.absolute directly (false here =>",
+        "  relative); the alt would take its inverse.",
+        "The keyboard hash is reused from the measured baseline, and that reuse",
+        "is sound rather than assumed: make_keyboard_hid() takes no arguments,",
+        "so no mouse setting can reach it."
+      ],
+      "require_udc_bound": true,
+      "functions": [
+        {
+          "name": "hid.usb0",
+          "_what": "keyboard — invariant across modes",
+          "protocol": "1",
+          "subclass": "1",
+          "report_length": "8",
+          "desc_sha256": "5333cc3a23db1dd7a9e8303e2169a54a7070f69822fa503014834652c24410b6"
+        },
+        {
+          "name": "hid.usb1",
+          "_what": "the ONLY mouse — relative, wheel OFF. protocol=2/subclass=1 is stock for the relative maker, NOT evidence of a patch.",
+          "protocol": "2",
+          "subclass": "1",
+          "report_length": "4",
+          "desc_sha256": "55c045b2daf5c91fd72fd8e1821e02a41c4118ea1badfdf4644e6db3d9970eed"
+        }
+      ],
+      "hid_nodes": ["kvmd-hid-keyboard", "kvmd-hid-mouse"]
+    },
+
+    "ipad/hw=true": {
+      "_provenance": [
+        "CONTINGENT variant, recorded so the table can answer either way the",
+        "open design question lands. nixos-developer-system's design forces",
+        "horizontal_wheel=false in iPad mode, which makes ipad/hw=false the",
+        "active entry; that choice is NOT yet confirmed by manager/georg. If",
+        "they flip it to leave the wheel on, this becomes the active entry.",
+        "Same single-relative-mouse shape, wheel-on descriptor: report_length",
+        "5 and the hash measured for the relative hw=true maker.",
+        "Holding both costs nothing and removes a scramble later; the mode",
+        "selection decides which one is asserted, so a wrong guess here can",
+        "never silently gate the wrong shape."
+      ],
+      "require_udc_bound": true,
+      "functions": [
+        {
+          "name": "hid.usb0",
+          "_what": "keyboard — invariant across modes",
+          "protocol": "1",
+          "subclass": "1",
+          "report_length": "8",
+          "desc_sha256": "5333cc3a23db1dd7a9e8303e2169a54a7070f69822fa503014834652c24410b6"
+        },
+        {
+          "name": "hid.usb1",
+          "_what": "the ONLY mouse — relative, wheel ON",
+          "protocol": "2",
+          "subclass": "1",
+          "report_length": "5",
+          "desc_sha256": "92155ddf022d4091f5e15eea5871107cd6ff7a4e6ada0ef931bd14b86c5632d0"
+        }
+      ],
+      "hid_nodes": ["kvmd-hid-keyboard", "kvmd-hid-mouse"]
+    }
+  }
+}

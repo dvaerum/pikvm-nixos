@@ -7,6 +7,8 @@
     ./system/auto-upgrade.nix
     ./otg.nix
     ./kvmd.nix
+    ./hidmode.nix
+    ./hidmode-endpoint.nix
     ./nginx.nix
     ./hid-recovery.nix
     ./hid-recovery-endpoint.nix

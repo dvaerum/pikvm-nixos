@@ -27,42 +27,11 @@ let
 
   ustreamer = cfg.ustreamer;
 
-  # iPadOS needs the absolute-mouse HID to advertise the boot mouse interface
-  # (protocol=2, subclass=1) or it ignores clicks. Upstream hardcodes
-  # protocol=0/subclass=0, so we patch it at BUILD time — no read-only-fs
-  # dance, no re-apply-after-upgrade hook; it's simply baked into the package.
-  kvmd =
-    if cfg.ipadCompat.enable then
-      cfg.package.overrideAttrs (old: {
-        postPatch = (old.postPatch or "") + ''
-          substituteInPlace kvmd/apps/otg/hid/mouse.py \
-            --replace-fail 'protocol=0,  # None protocol' 'protocol=2,  # Mouse protocol' \
-            --replace-fail 'subclass=0,  # No subclass' 'subclass=1,  # Boot interface subclass'
-        '';
-      })
-    else
-      cfg.package;
-
-  # iPadOS compatibility overrides (the working values from the iPad setup
-  # guide). Applied as an early override.d entry so the user's own `settings`
-  # (10-settings) still win over it.
-  ipadSettings = {
-    kvmd = {
-      streamer = {
-        resolution = "1280x720"; # match iPad HDMI 16:9, lowest bandwidth
-        desired_fps = 30; # smoother than 60 over USB 2.0
-        cmd_append = [ "--buffers=1" ]; # much lower capture latency
-      };
-      hid = {
-        mouse = {
-          absolute = false; # relative mode; iPadOS treats absolute as touch
-          horizontal_wheel = false;
-        };
-        mouse_alt.device = ""; # disable the 2nd mouse; confuses iPadOS
-      };
-    };
-  };
-  ipadOverride = pkgs.writeText "05-ipad.yaml" (builtins.toJSON ipadSettings);
+  # The kvmd package the module runs (also referenced for share/, the helper
+  # binaries, and passthru.tesseract). iPad HID support is the RUNTIME
+  # services.pikvm.kvmd.hidMode switch (modules/hidmode.nix) — a config-only
+  # mode, no package patch (the old ipadCompat mouse.py patch was dead code).
+  kvmd = cfg.package;
 
   configsDefault = "${kvmd}/share/kvmd/configs.default";
 
@@ -245,11 +214,14 @@ let
   # restarts kvmd and the change is silently inert until the next reboot or
   # package bump. NB: a restart drops active kvmd sessions — the accepted
   # tradeoff (a visible reconnect) vs a config change silently not applying.
+  # NB: the mutable /var HID-mode override (override.d/90-hidmode.yaml, see
+  # modules/hidmode.nix) is deliberately NOT a trigger — a mode switch restarts
+  # kvmd itself, and nixos-rebuild must never reset the persisted runtime choice.
   kvmdConfigTriggers = [
     nixosPaths
     userSettings
     mainConfigs
-  ] ++ lib.optional cfg.ipadCompat.enable ipadOverride;
+  ];
 
   # Tools kvmd shells out to at runtime, placed on the services' PATH.
   runtimePath = [
@@ -371,14 +343,6 @@ in
       '';
     };
 
-    ipadCompat.enable = lib.mkEnableOption ''
-      iPadOS compatibility. Bundles everything from the PiKVM-on-iPad setup
-      guide declaratively: patches the absolute-mouse HID to advertise the boot
-      mouse interface (protocol=2/subclass=1, so iPadOS accepts clicks), forces
-      relative mouse mode, disables the secondary mouse, and applies the tuned
-      USB-capture streamer settings (1280x720@30, --buffers=1). Your own
-      `settings` still override these
-    '';
   };
 
   config = lib.mkIf cfg.enable {
@@ -452,9 +416,6 @@ in
       "kvmd/override.yaml".text = "";
       "kvmd/override.d/00-nixos-paths.yaml".source = nixosPaths;
       "kvmd/override.d/10-settings.yaml".source = userSettings;
-    }
-    // lib.optionalAttrs cfg.ipadCompat.enable {
-      "kvmd/override.d/05-ipad.yaml".source = ipadOverride;
     };
 
     # The main config captures from /dev/kvmd-video; give the capture device a

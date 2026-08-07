@@ -240,7 +240,11 @@ in
       systemd.services.pikvm-mcp = {
         after = [ "pikvm-hid-recovery-token.service" ];
         wants = [ "pikvm-hid-recovery-token.service" ];
-        serviceConfig.EnvironmentFile = mcpEnvPath;
+        # LIST form so this concatenates with other MCP-facing endpoints'
+        # EnvironmentFile (e.g. hidmode-endpoint) instead of colliding — the
+        # appliance enables both, and two bare-string defs of one option fail
+        # eval. systemd unitOptions merge list definitions across modules.
+        serviceConfig.EnvironmentFile = [ mcpEnvPath ];
       };
     })
   ]);

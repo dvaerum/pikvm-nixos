@@ -105,6 +105,9 @@
           kvmd-services = pkgs.testers.runNixOSTest (
             import ./tests/kvmd-services.nix { inherit self pkgs; }
           );
+          hidmode = pkgs.testers.runNixOSTest (
+            import ./tests/hidmode.nix { inherit self pkgs; }
+          );
           mcp-proxy = pkgs.testers.runNixOSTest (
             import ./tests/mcp-proxy.nix { inherit self pkgs; }
           );
@@ -123,6 +126,33 @@
           otg-mode-assembly = pkgs.testers.runNixOSTest (
             import ./tests/otg-mode-assembly.nix { inherit self pkgs; }
           );
+
+          # Aggregate-composition gate: (1) force EVALUATION of every shipped
+          # host's toplevel — the per-module VM tests above import modules in
+          # isolation, so they miss cross-module conflicts that only surface in
+          # the assembled host (e.g. two endpoints both assigning pikvm-mcp's
+          # single-valued serviceConfig.EnvironmentFile, which fails eval on the
+          # real appliance while every per-module test stays green). (2) assert
+          # the appliance actually LOADS BOTH MCP-facing endpoints' env files —
+          # the list-contribute invariant: both concatenate, neither wins (a
+          # future "simplify to one scalar" would still eval, so (1) alone can't
+          # catch it). Eval-only (drvPath — no VM, no realise, seconds).
+          host-eval =
+            let
+              hostDrvs = lib.mapAttrsToList (
+                _: sys: sys.config.system.build.toplevel.drvPath
+              ) self.nixosConfigurations;
+              applianceMcpEnv =
+                self.nixosConfigurations.rpi4.config.systemd.services.pikvm-mcp.serviceConfig.EnvironmentFile or [ ];
+              bothMcpEnvLoaded =
+                builtins.elem "/run/pikvm-hid-recovery/mcp.env" applianceMcpEnv
+                && builtins.elem "/run/pikvm-hidmode/mcp.env" applianceMcpEnv;
+            in
+            assert lib.assertMsg bothMcpEnvLoaded
+              "appliance pikvm-mcp must load BOTH endpoints' env files (hid-recovery + hidmode); got ${builtins.toJSON applianceMcpEnv}";
+            pkgs.runCommand "pikvm-host-eval" {
+              drvs = lib.concatStringsSep "\n" hostDrvs;
+            } "printf '%s\\n' \"$drvs\" > $out";
         }
       );
 

@@ -26,7 +26,7 @@ Everything you can set lives behind the module options:
 |---|---|
 | `services.pikvm.kvmd.platform` | `"auto"` (default) or a fixed `v2-hdmi-rpi4`-style profile |
 | `services.pikvm.kvmd.settings` | Declarative kvmd override (the config tree), e.g. `{ kvmd.streamer.desired_fps.default = 30; }` |
-| `services.pikvm.kvmd.ipadCompat.enable` | iPadOS compatibility preset (see below) |
+| `services.pikvm.kvmd.hidMode.{default,enable}` | Runtime iPad/desktop HID switch (see below) |
 | `services.pikvm.otg.enable` | USB HID/MSD gadget (on by default in the appliance) |
 | `services.pikvm.autoUpgrade.{flake,dates,allowReboot,enable}` | Weekly self-update source & policy |
 
@@ -63,31 +63,57 @@ overlays/    exposes the pikvm.* package scope onto nixpkgs
 template/    the scaffold used by Option A
 ```
 
-## Controlling an iPad (iPadOS compatibility)
+## Controlling an iPad (HID mode)
 
-Controlling an iPad over a USB HDMI grabber (e.g. the MacroSilicon MS2109)
-needs a few HID/streamer adjustments. On Arch-PiKVM that's a whole checklist —
-edit `override.yaml`, `sed`-patch `mouse.py`, add a pacman hook so the patch
-survives upgrades, fiddle with USB ports. Here it's one option:
+Controlling an iPad over a USB HDMI grabber (e.g. the MacroSilicon MS2109) needs
+the emulated mouse to be a single **relative** "boot mouse" — iPadOS treats an
+absolute pointer as a touch digitiser and ignores it. On Arch-PiKVM that's a
+checklist (edit `override.yaml`, `sed`-patch `mouse.py`, add a pacman hook,
+fiddle with USB ports). Here it's a runtime mode you can flip without a rebuild.
+
+Fresh-install default (faithful stock desktop — absolute dual mouse):
 
 ```nix
-services.pikvm.kvmd.ipadCompat.enable = true;
+services.pikvm.kvmd.hidMode.default = "desktop";
 ```
 
-That single switch, declaratively:
+Ship a device as an iPad target (single relative mouse):
 
-- **patches the absolute-mouse HID at build time** to advertise the boot mouse
-  interface (`protocol=2`/`subclass=1`) — iPadOS ignores clicks otherwise. It's
-  baked into the package, so it simply *can't* be lost on an upgrade (no
-  re-apply hook needed).
-- forces **relative mouse mode** and disables the secondary mouse (absolute
-  reports read as touch/gestures on iPadOS),
-- applies the tuned USB-capture streamer settings (`1280x720@30`, `--buffers=1`
-  for low latency).
+```nix
+services.pikvm.kvmd.hidMode.default = "ipad";
+```
 
-Your own `services.pikvm.kvmd.settings` still override any of these. The MS2109
-grabber is matched by its USB id (`534d:2109`) for the `/dev/kvmd-video`
-symlink, so — unlike upstream — it works in **any** USB port.
+`ipad` mode sets `mouse.absolute=false`, `mouse_alt.device=""` (no second mouse)
+and `horizontal_wheel=false` — pikvm01's known-working shape. Switch a **running**
+box (no rebuild; the choice persists across reboot and redeploy) via the on-box
+CLI, or the loopback endpoint the built-in MCP uses:
+
+```sh
+pikvm-hidmode set ipad     # or: pikvm-hidmode get
+# MCP-driven: POST /hidmode {"mode":"ipad"} on the loopback endpoint
+```
+
+Switching re-assembles the USB gadget, so the target sees a brief USB
+re-enumerate and the active session drops (~5s) — same as a kvmd restart.
+
+The known-good iPad **streamer** tuning is orthogonal (not part of the HID mode);
+apply it via `settings` if you want it:
+
+```nix
+services.pikvm.kvmd.settings.kvmd.streamer = {
+  resolution = "1280x720";        # match iPad HDMI 16:9, lowest bandwidth
+  desired_fps = 30;               # smoother than 60 over USB 2.0
+  cmd_append = [ "--buffers=1" ]; # lower capture latency
+};
+```
+
+The MS2109 grabber is matched by its USB id (`534d:2109`) for the
+`/dev/kvmd-video` symlink, so — unlike upstream — it works in **any** USB port.
+
+> ⚠️ **Not behaviourally proven on the appliance.** The gadget re-assembles to
+> the selected shape, but no automated gate on this project currently
+> demonstrates that appliance iPad mode makes a real iPad move a pointer — see
+> [`docs/decisions/0001-ipad-hid-mode.md`](decisions/0001-ipad-hid-mode.md).
 
 On the iPad itself: turn **AssistiveTouch off** (Settings → Accessibility →
 Touch), and use Safari/Firefox for the web UI.

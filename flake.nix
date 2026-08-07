@@ -31,8 +31,19 @@
     # PiKVM's keyboard/mouse/screen. Consumed as a proper flake (its former
     # `nixitin` input was removed upstream), following our nixpkgs so its
     # package builds against the same base as the rest of the image.
+    #
+    # ⚠️ PINNED TO AN EXPLICIT REV (was a floating default-branch ref) so the
+    # weekly `nix flake update` (.github/workflows/update.yml) can NOT auto-bump
+    # it. Rationale (#51): the upcoming HID-mode-derivation rev makes
+    # PIKVM_HIDMODE_URL + a `--target` BOTH being set a FAIL-FAST startup error.
+    # hosts/rpi4.nix still declares `services.pikvm-mcp.target = "ipad"`, and
+    # hidmode-endpoint.nix wires PIKVM_HIDMODE_URL when the endpoint is on — so an
+    # unpinned auto-bump to that rev would crash-loop the appliance MCP (a runtime
+    # failure the eval gate can't catch). Bump this rev DELIBERATELY, ATOMICALLY
+    # with deleting rpi4.nix's `target`, gated on it-03400's inner-binary
+    # on-appliance verify. See docs + the #51 sequencing.
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server";
+      url = "github:dvaerum/pikvm_mcp_server/c8259afc2b8ae8214386029500fd2c0718fe764a";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

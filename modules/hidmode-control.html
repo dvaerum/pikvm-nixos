@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<!-- PiKVM HID-mode control (#51) — the minimal self-contained dashboard control
+     (option "a"). Served on the 443 vhost at /hidmode-control, behind the SAME
+     dashboard auth as the rest of the UI (nginx server-level auth_request). It
+     talks to the same-origin GET/POST /hidmode proxy, which injects the bearer
+     token server-side — this page never sees the token or the loopback :8083.
+     The appliance /var marker is the single source of truth: we POST, then POLL
+     GET until it reflects the new mode. Never optimistic.
+     The integrated stock-dashboard menu control is the REQUIRED faithfulness
+     follow-up (see docs/decisions/0002-hidmode-web-control.md). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PiKVM — HID mode</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 34rem; margin: 3rem auto;
+         padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.3rem; }
+  .mode { font-weight: 700; }
+  .card { border: 1px solid currentColor; border-radius: 8px; padding: 1rem 1.25rem;
+          opacity: 0.92; }
+  button { font: inherit; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; }
+  button[disabled] { cursor: progress; opacity: 0.6; }
+  .status { margin-top: 1rem; min-height: 1.5rem; }
+  .err { color: #c0392b; }
+  .muted { opacity: 0.7; font-size: 0.9rem; }
+  code { padding: 0 0.25rem; }
+</style>
+</head>
+<body>
+<h1>HID mode</h1>
+<div class="card">
+  <p>Current mode: <span id="mode" class="mode">…</span></p>
+  <p class="muted" id="desc"></p>
+  <button id="toggle" disabled>…</button>
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+</div>
+<p class="muted">
+  <strong>desktop</strong> = absolute dual mouse (stock, for normal targets).
+  <strong>ipad</strong> = single relative mouse (iPadOS ignores absolute pointers).
+  Switching briefly re-plugs the target's USB and drops your session (~5&nbsp;s),
+  the same as a kvmd restart.
+</p>
+
+<script>
+"use strict";
+const MODES = { desktop: "ipad", ipad: "desktop" };
+const el = (id) => document.getElementById(id);
+let current = null, busy = false;
+
+function setStatus(msg, isErr) {
+  const s = el("status");
+  s.textContent = msg || "";
+  s.className = "status" + (isErr ? " err" : "");
+}
+
+async function api(method, body) {
+  // Same-origin; the dashboard session cookie authenticates via nginx
+  // auth_request, and the 443 proxy adds the bearer server-side.
+  const opt = { method, headers: { "Accept": "application/json" }, credentials: "same-origin" };
+  if (body) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch("/hidmode", opt);
+  if (r.status === 401 || r.status === 403) {
+    throw new Error("Session expired — reload the dashboard and sign in again.");
+  }
+  let data = {};
+  try { data = await r.json(); } catch (e) { /* non-JSON */ }
+  if (!r.ok || data.ok === false) {
+    throw new Error(data.message || ("Request failed (HTTP " + r.status + ")."));
+  }
+  return data;
+}
+
+function render() {
+  el("mode").textContent = current || "unknown";
+  const other = MODES[current];
+  const btn = el("toggle");
+  el("desc").textContent = current === "ipad"
+    ? "Single relative mouse (iPad / iPadOS targets)."
+    : "Absolute dual mouse (stock desktop/laptop targets).";
+  if (other && !busy) {
+    btn.textContent = "Switch to " + other;
+    btn.disabled = false;
+  } else {
+    btn.disabled = true;
+  }
+}
+
+async function refresh() {
+  try {
+    const d = await api("GET");
+    current = d.mode;
+    render();
+    return d.mode;
+  } catch (e) {
+    setStatus(e.message, true);
+    throw e;
+  }
+}
+
+async function pollUntil(target, deadlineMs) {
+  // POST is non-blocking; the marker flips only after the gadget re-assembles
+  // and kvmd restarts. Poll the appliance (single source of truth) — never
+  // optimistically claim success.
+  while (Date.now() < deadlineMs) {
+    await new Promise((res) => setTimeout(res, 2000));
+    try {
+      const m = await refresh();
+      if (m === target) return true;
+    } catch (e) { /* transient during the kvmd restart; keep polling */ }
+  }
+  return false;
+}
+
+async function onToggle() {
+  const target = MODES[current];
+  if (!target || busy) return;
+  if (!window.confirm(
+      "Switch HID mode to \"" + target + "\"?\n\n" +
+      "This re-plugs the target's emulated USB and drops your current session " +
+      "for about 5 seconds (the same as a kvmd restart). Continue?")) {
+    return;
+  }
+  busy = true; render();
+  setStatus("Switching to " + target + "… the target's USB re-enumerates and this session drops (~5 s). Waiting for the appliance to confirm…");
+  try {
+    await api("POST", { mode: target });
+  } catch (e) {
+    busy = false; setStatus(e.message, true); render(); return;
+  }
+  const ok = await pollUntil(target, Date.now() + 45000);
+  busy = false;
+  if (ok) setStatus("Now in " + target + " mode.");
+  else setStatus("Switch requested, but the appliance hasn't reported " + target +
+                 " yet. Reload to re-check.", true);
+  render();
+}
+
+el("toggle").addEventListener("click", onToggle);
+refresh().catch(() => {});
+</script>
+</body>
+</html>

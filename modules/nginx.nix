@@ -73,7 +73,10 @@ in
   # services.pikvm.web.terminal option is declared for ANY nginx consumer
   # (the appliance AND tests that import nginx.nix alone, e.g. tests/mcp-proxy.nix
   # which references cfg.terminal via the config below).
-  imports = [ ./webterm.nix ];
+  imports = [
+    ./webterm.nix
+    ./hidmode-web.nix
+  ];
 
   options.services.pikvm.web = {
     # DEFAULT-ON, like stock PiKVM (the box is a web KVM out of the box). Set to

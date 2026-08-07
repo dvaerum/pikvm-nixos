@@ -123,6 +123,9 @@
           http-redirect = pkgs.testers.runNixOSTest (
             import ./tests/http-redirect.nix { inherit self pkgs; }
           );
+          hidmode-web = pkgs.testers.runNixOSTest (
+            import ./tests/hidmode-web.nix { inherit self pkgs; }
+          );
           otg-mode-assembly = pkgs.testers.runNixOSTest (
             import ./tests/otg-mode-assembly.nix { inherit self pkgs; }
           );

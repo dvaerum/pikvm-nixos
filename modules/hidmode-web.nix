@@ -29,7 +29,13 @@
 let
   webCfg = config.services.pikvm.web;
   cfg = webCfg.hidModeControl;
-  endpointCfg = config.services.pikvm.kvmd.hidMode.endpoint;
+  # `or { }` keeps this module composable when imported (via nginx.nix) WITHOUT the
+  # hidMode stack — e.g. the webterm VM test, which pulls nginx.nix but not
+  # hidmode.nix/hidmode-endpoint.nix. Then endpoint.enable is absent → the
+  # hidModeControl default below resolves false and the mkIf config never forces
+  # endpointCfg.port. The real appliance imports the full stack, so it's the real
+  # endpoint there.
+  endpointCfg = config.services.pikvm.kvmd.hidMode.endpoint or { };
 
   # The endpoint's own runtime token (provisioned by pikvm-hidmode-token.service
   # in hidmode-endpoint.nix). We read it, never own it.
@@ -37,6 +43,18 @@ let
   authDir = "/run/pikvm-hidmode-proxy";
 
   controlHtml = pkgs.writeText "hidmode-control.html" (builtins.readFile ./hidmode-control.html);
+
+  # The #51 option-b landing tile links to /hidmode-control/ (index/main.js always
+  # appends "/" to the extras manifest `path`). nginx can't serve a file from a
+  # "/"-terminated URI two ways over (a file `alias` concatenates `index.html` onto
+  # the path; `alias`+`index` internally redirects to the server root, not the
+  # alias — both footguns). The idiomatic fix is to canonicalize the slash form to
+  # the served no-slash page with a 301; browsers (and `curl -L`) follow it
+  # transparently. So only the no-slash /hidmode-control serves the file.
+  controlAuth = ''
+    include /etc/kvmd/nginx/loc-login.conf;
+    include /etc/kvmd/nginx/loc-nocache.conf;
+  '';
 in
 {
   options.services.pikvm.web.hidModeControl = {
@@ -46,7 +64,7 @@ in
       # control is only meaningful if there's a 443 dashboard to host it and a
       # loopback endpoint to proxy to. Absent on a stock-like install with no
       # endpoint (faithful).
-      default = webCfg.enable && endpointCfg.enable;
+      default = webCfg.enable && (endpointCfg.enable or false);
       defaultText = lib.literalExpression "config.services.pikvm.web.enable && config.services.pikvm.kvmd.hidMode.endpoint.enable";
       example = false;
       description = ''
@@ -121,15 +139,13 @@ in
 
       # The self-contained control page (control "a"). Dashboard-authed; a
       # browser hitting it unauth gets 302->login (loc-login), like the rest of
-      # the UI.
-      "= /hidmode-control" = {
-        extraConfig = ''
-          include /etc/kvmd/nginx/loc-login.conf;
-          include /etc/kvmd/nginx/loc-nocache.conf;
-          default_type text/html;
-          alias ${controlHtml};
-        '';
-      };
+      # the UI. The no-slash form serves the file; the trailing-slash form the
+      # landing-dashboard tile (#51 option-b) links to 301-canonicalizes to it.
+      "= /hidmode-control".extraConfig = ''
+        ${controlAuth}default_type text/html;
+        alias ${controlHtml};
+      '';
+      "= /hidmode-control/".extraConfig = "return 301 /hidmode-control;";
     };
   };
 }

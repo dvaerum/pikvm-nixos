@@ -96,13 +96,12 @@ in
       };
     };
 
-    # Point kvmd's extras scanner at the COMPOSED dir (kvmd's ipmi/vnc ∪ webterm)
-    # so ExtrasInfoSubmanager finds share/kvmd/extras/webterm/manifest.yaml and
-    # reports state.webterm → the UI renders the "• Term" button. This 10-settings
-    # freeform value overrides the 00-nixos-paths default in modules/kvmd.nix
-    # (extras = ${kvmd}/share/kvmd/extras) without touching that file. The nginx
-    # web-root + extras glob-includes that serve the icon and the /extras/webterm/
-    # ttyd location live in modules/nginx.nix (gated on the same option).
-    services.pikvm.kvmd.settings.kvmd.info.extras = "${pkgs.pikvm.kvmd-webterm.extrasDir}";
+    # kvmd's extras scanner is pointed at the COMPOSED extras dir (base ∪ webterm ∪
+    # hidmode) by modules/nginx.nix — the front-door composition owner — so
+    # ExtrasInfoSubmanager finds share/kvmd/extras/webterm/manifest.yaml and reports
+    # state.webterm → the UI renders the "• Term" button. Composing it in ONE place
+    # (rather than each extra setting kvmd.info.extras) avoids conflicting defs. The
+    # nginx web-root + extras glob-includes that serve the icon and the
+    # /extras/webterm/ ttyd location also live in modules/nginx.nix.
   };
 }

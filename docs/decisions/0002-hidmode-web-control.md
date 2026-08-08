@@ -93,19 +93,54 @@ Four properties, each load-bearing:
   it-03400); a VM check asserts both the fields-through-proxy and the page logic.
   (Spec sharpened by the manager + it-03400 from real-silicon drift testing.)
 
-## The functional/faithful split — control "a" is NOT the end state
+## The functional/faithful split — control "a" + the dashboard tile (option-b)
 
-This ADR ships control **"a"**: a standalone authenticated page. It is the
-**functional** control + the secure proxy, landed now.
+This ADR shipped control **"a"** first: a standalone authenticated page
+(`/hidmode-control`) — the functional control + the security-critical proxy,
+landed and reviewed on its own. Integrating the switch into the stock PiKVM
+dashboard so it lives where the rest of the UI does is the required faithfulness
+follow-up ("option-b"); "a" being good enough was explicitly rejected as the end
+state.
 
-**Control "b" — integrating the toggle into the stock PiKVM dashboard menu (the
-web-terminal restoration is the precedent and the bar) — is a REQUIRED
-faithfulness follow-up, not optional.** A user expects the mode control where the
-rest of the dashboard lives; the project's faithfulness line is firm. "a" exists
-so the function and the security-critical proxy are available and reviewed
-independently of the more invasive dashboard-asset composition "b" needs. **"a"
-being good enough is explicitly rejected as the end state.** Tracked as #51's UI
-follow-up.
+**Decision (option-b): a LANDING-dashboard tile via the supported extras
+manifest.** `modules/hidmode-extra/manifest.yaml` (path → `hidmode-control`, an
+icon, a `daemon:` visibility gate) + the icon, composed into `kvmd.info.extras`
+alongside webterm by the front-door (`modules/nginx.nix`). This is
+mechanism-identical to the stock IPMI/VNC tiles: the landing dashboard
+(`index/main.js`) renders one tile per advertised extra **generically**, so a new
+`hidmode` extra gets a tile with **zero stock web-tree patch**, auto-tracking kvmd
+upgrades — and it **keeps this ADR's control page** (the confirm + non-optimistic
+poll + the next-boot drift warning). The tile is gated visible on the loopback
+endpoint unit (shows iff the feature is live), and links to `/hidmode-control/`
+(the trailing-slash form `index/main.js` builds; served alongside the standalone
+`/hidmode-control`). Placement — the launcher, next to IPMI/VNC — is semantically
+right: desktop-vs-iPad is a per-target setup choice, not a per-moment in-session
+control.
+
+### Rejected alternatives (investigated 2026-08-08)
+
+- **B — an in-session KVM-toolbar button (the webterm "• Term" precedent).** The
+  in-session toolbar is NOT data-driven: upstream kvmd hardcodes one session
+  button per *known official* extra (webterm's button is stock, gated on
+  `state.webterm` by name), so a new non-upstream control has no in-session home
+  without editing the stock web tree. Cost, from upstream git history: the host
+  file `web/kvm/navbar-system.pug` churns ~2 commits/month (34 in 19 months) —
+  constant merge-conflict surface — and `web/kvm/index.html` is a *generated* Pug
+  artifact; worse, the toolbar's wm-attribute API silently renamed once in the
+  window (`data-show-window` → `data-wm-window-show`, Nov 2025), a change that
+  breaks a fork with **no conflict marker**. A patched fork of two churny files
+  with a silent-break cadence is against "best long-term / best practice."
+- **C — a GPIO custom-menu toggle.** kvmd's GPIO menu *is* a genuinely supported,
+  config-driven, zero-fork **in-session** mechanism (the `#gpio-menu` is rendered
+  at runtime from `kvmd.gpio.view`; a `cmd`/`cmdret` driver can run a script;
+  upstream even routes its own "• WoL" button through it). Rejected as PRIMARY: a
+  GPIO button/switch can only pulse/toggle a channel + show an LED — it cannot
+  carry the non-optimistic poll, the settling/fail-closed state, or the next-boot
+  drift warning, and dynamic buttons get a fixed generic confirm string (not the
+  ~5 s re-plug warning). Reducing a session-dropping, drift-prone, gadget-
+  re-assembling switch to a bare toggle would regress the exact safety UX this ADR
+  established. Viable later as an *optional* power-user extra, not the faithful
+  default.
 
 ## Verification & its limit
 

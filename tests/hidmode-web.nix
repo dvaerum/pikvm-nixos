@@ -134,6 +134,26 @@
     assert "will boot into" in page, \
         "the control page must warn which mode the box will boot into on requested != observed"
 
+    # --- (5b) option-b: the HID-mode landing-dashboard tile ---------------
+    # The stock landing dashboard renders a generic tile per advertised extra from
+    # /api/info?fields=extras (icon + path + name), gated visible on the extra's
+    # daemon being active — the SUPPORTED, zero-web-tree-patch mechanism (like
+    # ipmi/vnc). Assert our hidmode extra is advertised + live, and that its icon +
+    # the trailing-slash tile target both resolve (index/main.js appends "/" to the
+    # manifest path). See docs/decisions/0002.
+    extras = json.loads(machine.succeed(f"curl -sk {A} 'https://localhost/api/info?fields=extras'"))
+    hidmode = extras["result"]["extras"].get("hidmode")
+    assert hidmode is not None, f"the hidmode extra must be advertised to the dashboard; got {extras!r}"
+    assert hidmode.get("path") == "hidmode-control", f"hidmode tile must link to hidmode-control; got {hidmode!r}"
+    assert (hidmode.get("enabled") or hidmode.get("started")), \
+        f"hidmode tile must be visible (its endpoint daemon active); got {hidmode!r}"
+    icon = machine.succeed(f"curl -sk {A} https://localhost/extras/hidmode/hidmode.svg")
+    assert "<svg" in icon, "the hidmode tile icon must be served from the composed web root"
+    # -L: the tile's slash URL 301-canonicalizes to /hidmode-control; a real
+    # browser (it-03400 Firefox) follows it transparently, and so must curl here.
+    page_slash = machine.succeed(f"curl -skL {A} https://localhost/hidmode-control/")
+    assert "HID mode" in page_slash, "the trailing-slash tile URL must serve the control page (via 301)"
+
     # --- (6) the switch drives end-to-end through the proxy ---------------
     # POST is non-blocking; the assembled gadget flips after it re-assembles + kvmd
     # restarts. Poll GET (through the proxy) until `mode` reflects ipad.

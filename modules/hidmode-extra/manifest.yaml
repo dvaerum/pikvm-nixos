@@ -1,0 +1,6 @@
+name: HID Mode
+description: Switch the emulated USB HID between desktop (absolute) and iPad (relative) input.
+icon: extras/hidmode/hidmode.svg
+path: hidmode-control
+daemon: pikvm-hidmode-endpoint
+place: 22

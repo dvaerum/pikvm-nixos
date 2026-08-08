@@ -30,14 +30,51 @@ let
   kvmd = config.services.pikvm.kvmd.package;
   stockNginx = "${kvmd}/share/kvmd/configs.default/nginx";
 
-  # Web Terminal (Phase 2.5, kvmd-webterm): when services.pikvm.web.terminal is
-  # on, serve the COMPOSED web root (kvmd UI ∪ the webterm menu icon) and let
-  # webterm self-register its nginx via the extras glob-include — exactly how
-  # kvmd's own nginx.conf.mako wires extras. Among the extras only webterm ships
-  # nginx.ctx-*.conf, so the glob activates only it.
+  # Front-door "extras" composition. The stock landing dashboard renders one tile
+  # per advertised extra (kvmd.info.extras) generically, and nginx self-registers
+  # each extra's nginx snippets via a glob — exactly how kvmd's own
+  # nginx.conf.mako wires extras. We advertise the base (kvmd's extras minus the
+  # unpackaged ipmi/vnc daemons) ∪ each enabled front-door extra, composed ONCE
+  # here (the front-door owns it) so kvmd.info.extras + the served web root + the
+  # nginx glob all see a single dir:
+  #   • webterm (Phase 2.5): the in-session "• Term" toolbar button — ships
+  #     nginx.ctx-*.conf (self-registers /extras/webterm/ttyd) + a menu icon.
+  #   • hidmode (#51 option-b): a LANDING-dashboard tile linking to /hidmode-control.
+  #     The SUPPORTED generic extras mechanism (identical to ipmi/vnc), ZERO
+  #     web-tree patch, auto-tracks kvmd upgrades; it keeps the #42 control page's
+  #     confirm + non-optimistic poll + #44 next-boot drift warning. Manifest+icon
+  #     only (no nginx snippet); tile visibility gated on the endpoint unit via the
+  #     manifest `daemon:`. Rejected alternatives (in-session fork B, GPIO toggle C)
+  #     are recorded in docs/decisions/0002.
   terminalEnabled = cfg.terminal.enable;
+  hidModeControlEnabled = cfg.hidModeControl.enable;
   webterm = pkgs.pikvm.kvmd-webterm;
-  webRoot = if terminalEnabled then webterm.webDir else "${kvmd}/share/kvmd/web";
+
+  # The hidmode landing-tile extra: manifest (scanned via kvmd.info.extras) + icon
+  # (served under the web root at the path the manifest references). Data-only.
+  hidmodeExtra = pkgs.runCommand "kvmd-extra-hidmode" { } ''
+    install -Dm644 ${./hidmode-extra/manifest.yaml} "$out/share/kvmd/extras/hidmode/manifest.yaml"
+    install -Dm644 ${./hidmode-extra/hidmode.svg}   "$out/share/kvmd/web/extras/hidmode/hidmode.svg"
+  '';
+
+  # kvmd's share dir is a read-only store path (can't drop extras into it), so we
+  # symlinkJoin its extras/web with each enabled front-door extra's subtree — no
+  # kvmd package patch needed. `kvmd-extras` is the filtered base (ipmi/vnc out).
+  composedExtras = pkgs.symlinkJoin {
+    name = "kvmd-extras-composed";
+    paths =
+      [ "${pkgs.pikvm.kvmd-extras}" ]
+      ++ lib.optional terminalEnabled "${webterm}/share/kvmd/extras"
+      ++ lib.optional hidModeControlEnabled "${hidmodeExtra}/share/kvmd/extras";
+  };
+  composedWeb = pkgs.symlinkJoin {
+    name = "kvmd-web-composed";
+    paths =
+      [ "${kvmd}/share/kvmd/web" ]
+      ++ lib.optional terminalEnabled "${webterm}/share/kvmd/web"
+      ++ lib.optional hidModeControlEnabled "${hidmodeExtra}/share/kvmd/web";
+  };
+  webRoot = composedWeb;
 
   # The stock server-context config, path-patched: the ONLY Arch path that must
   # change is the static web root (/usr/share/kvmd → the package). The unix-socket
@@ -185,6 +222,13 @@ in
       }) includeFiles
     );
 
+    # Advertise the composed extras to kvmd: the landing dashboard renders a tile
+    # per extra (ipmi/vnc filtered out by kvmd-extras; webterm/hidmode composed in)
+    # and the nginx glob above self-registers each extra's snippets. Set here (the
+    # front-door composition owner) so webterm + hidmode land in ONE value rather
+    # than conflicting defs; overrides the base default in modules/kvmd.nix.
+    services.pikvm.kvmd.settings.kvmd.info.extras = "${composedExtras}";
+
     services.nginx = {
       enable = true;
       recommendedTlsSettings = true;
@@ -195,7 +239,7 @@ in
       # it evals without realising the kvmd closure.
       appendHttpConfig = ''
         include ${stockNginx}/kvmd.ctx-http.conf;
-        ${lib.optionalString terminalEnabled "include ${webterm.extrasDir}/*/nginx.ctx-http.conf;"}
+        ${lib.optionalString terminalEnabled "include ${composedExtras}/*/nginx.ctx-http.conf;"}
       '';
 
       virtualHosts."pikvm" = {
@@ -213,7 +257,7 @@ in
         # redfish + auth_request), path-patched, plus our /mcp endpoint.
         extraConfig = ''
           include ${serverConf};
-          ${lib.optionalString terminalEnabled "include ${webterm.extrasDir}/*/nginx.ctx-server.conf;"}
+          ${lib.optionalString terminalEnabled "include ${composedExtras}/*/nginx.ctx-server.conf;"}
 
           # MCP Streamable-HTTP endpoint (built-in). The MCP self-authenticates
           # (security = "kvmd") so skip nginx auth_request; its responses stream

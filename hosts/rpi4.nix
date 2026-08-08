@@ -53,7 +53,13 @@
   # entirely — killing both the SD-init failure and the missing-ESP path.
   boot.loader.raspberry-pi.bootloader = "kernel";
 
-  # This kiosk's KVM target is an iPad — relative-only HID (absolute mouse is a
-  # no-op there). Override the general "desktop" default for the built-in MCP.
-  services.pikvm-mcp.target = "ipad";
+  # NOTE: this kiosk's KVM target is an iPad (relative-only HID), but the MCP no
+  # longer takes a static `services.pikvm-mcp.target`. Post-#46 the MCP derives
+  # its HID mode from the appliance's GET /hidmode (wired as
+  # services.pikvm-mcp.hidModeUrl in modules/hidmode-endpoint.nix, which also sets
+  # target = null) and is stateless about mode — the appliance's runtime hidMode
+  # switch + its persisted marker is the single source of truth. A static target
+  # here would be redundant and, with the URL present, an eval error (the #46
+  # module rejects both-set). The iPad default is expressed via
+  # services.pikvm.kvmd.hidMode on the appliance, not here.
 }

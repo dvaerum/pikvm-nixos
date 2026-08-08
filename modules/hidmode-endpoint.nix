@@ -292,11 +292,19 @@ in
       networking.firewall = { }; # loopback only; nothing to open
     }
 
-    # Point the MCP server at us — static URL as an env var; the secret token via
-    # the runtime EnvironmentFile. Only when pikvm-mcp is actually present.
+    # Point the MCP server at us — the URL via the pikvm-mcp module's first-class
+    # `hidModeUrl` option (EVAL-VISIBLE, so the module's target⊕hidModeUrl
+    # mutual-exclusion assertion actually protects); the secret token stays in the
+    # runtime EnvironmentFile below (never a nix value → no /nix/store leak). Only
+    # when pikvm-mcp is actually present.
     (lib.mkIf (config.services.pikvm-mcp.enable or false) {
-      services.pikvm-mcp.extraEnv.PIKVM_HIDMODE_URL =
-        "http://127.0.0.1:${toString cfg.port}/hidmode";
+      # URL-driven ⟺ target-independent: the MCP derives HID mode from this
+      # endpoint's GET /hidmode, so force the flake wrapper's
+      # `target = mkDefault "desktop"` to null → the module omits `--target`
+      # (both-set is a runtime fail-fast the #46 module now rejects at eval).
+      # Single source: hidModeUrl set here ⟺ target null here.
+      services.pikvm-mcp.hidModeUrl = "http://127.0.0.1:${toString cfg.port}/hidmode";
+      services.pikvm-mcp.target = lib.mkForce null;
 
       systemd.services.pikvm-mcp = {
         after = [ "pikvm-hidmode-token.service" ];

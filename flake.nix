@@ -32,18 +32,19 @@
     # `nixitin` input was removed upstream), following our nixpkgs so its
     # package builds against the same base as the rest of the image.
     #
-    # ⚠️ PINNED TO AN EXPLICIT REV (was a floating default-branch ref) so the
-    # weekly `nix flake update` (.github/workflows/update.yml) can NOT auto-bump
-    # it. Rationale (#51): the upcoming HID-mode-derivation rev makes
-    # PIKVM_HIDMODE_URL + a `--target` BOTH being set a FAIL-FAST startup error.
-    # hosts/rpi4.nix still declares `services.pikvm-mcp.target = "ipad"`, and
-    # hidmode-endpoint.nix wires PIKVM_HIDMODE_URL when the endpoint is on — so an
-    # unpinned auto-bump to that rev would crash-loop the appliance MCP (a runtime
-    # failure the eval gate can't catch). Bump this rev DELIBERATELY, ATOMICALLY
-    # with deleting rpi4.nix's `target`, gated on it-03400's inner-binary
-    # on-appliance verify. See docs + the #51 sequencing.
+    # PINNED to an explicit rev (not a floating branch) so `nix flake update`
+    # can't silently move the appliance's agent surface. This rev carries #51's
+    # HID-mode derivation (#46): the MCP derives its mode from the appliance's GET
+    # /hidmode and is STATELESS about mode. The URL is wired via the module's
+    # first-class `services.pikvm-mcp.hidModeUrl` (hidmode-endpoint.nix), and the
+    # appliance sets `target = null` in the same block — so no `--target` is passed
+    # (URL-only derive). This rev also carries the module fix that makes a stray
+    # `hidModeUrl`+`target` both-set an EVAL error (nullOr target + conditional
+    # --target + a mutual-exclusion assertion), so the previous crash-loop trap is
+    # now caught by the host eval-gate, not just at runtime. Bump deliberately.
+    # (00cbfc0 = 64ce381 + a CI-only guard commit; identical package artifact.)
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server/c8259afc2b8ae8214386029500fd2c0718fe764a";
+      url = "github:dvaerum/pikvm_mcp_server/00cbfc0207c1be2b28b25679019e7fe9bd9d9654";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

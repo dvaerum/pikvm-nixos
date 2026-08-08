@@ -146,6 +146,15 @@ reads 2/1) and **not** a report_length constant. The marker stays as
 persistence/seed and rides along as `requested`; `requested != observed` after
 settling is a drift signal nothing previously detected.
 
+**Consumer contract** (so the field names don't invite the wrong read): drive on
+`mode`/`observed` — the authoritative assembled mode (`"desktop"|"ipad"`, or
+`null`/unrecognised while settling). `settled` means the gadget is
+**recognisable**, NOT that the *requested* switch succeeded: a failed switch
+returns `ok:true, settled:true` with `requested != observed`. So detect a
+failed/incomplete switch by comparing `requested` vs `observed` after settling —
+never by gating on `{ok, settled}`. A consumer that only ever drives the
+currently-assembled `mode` (fail-closed on `null`) is correct by construction.
+
 ### Why the switch restarts kvmd-otg then kvmd (not "just write the file")
 
 The mode keys are gadget topology, so writing `hidmode.yaml` alone changes

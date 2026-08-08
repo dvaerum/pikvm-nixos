@@ -47,6 +47,42 @@ not enumeration — those flip `true` only once a **target host** enumerates the
 over the OTG cable. So HID and MSD end-to-end are validated at the OTG-target cabling
 step, not on the bench.
 
+## HID-mode (iPad) rollback caveat — operator recovery
+
+The runtime desktop↔iPad HID switch (#51) persists the selected mode **outside the
+NixOS generation**: the executor writes `/var/lib/kvmd/hidmode.yaml` and the active
+config pulls it in via `/etc/kvmd/override.d/90-hidmode.yaml`, a symlink into `/var`
+that is deliberately not part of the generation (so a chosen mode survives OS
+upgrades). The design rationale for that placement is ADR-0001; this is the
+**operational** consequence and how to recover.
+
+**The trap:** because the mutable mode lives in `/var`, rolling the OS back to a
+generation from *before* #51 does **not** revert the HID mode. The old generation has
+no `pikvm-hidmode@` executor and no control surface (no web `/hidmode-control`, no
+`:8083` endpoint), yet kvmd still reads the leftover
+`/etc/kvmd/override.d/90-hidmode.yaml` → `/var/lib/kvmd/hidmode.yaml`. So a box left in
+**iPad** mode and then rolled back stays in iPad mode (relative-only mouse, no second
+mouse) with nothing in the rolled-back image to change it back — it reads as "the
+gadget is wrong and I can't fix it from the UI."
+
+**Recovery (either works):**
+- **Redeploy / roll forward to #51-or-newer** — the control surface returns; switch
+  back to desktop the normal way (web `/hidmode-control`, or
+  `systemctl start pikvm-hidmode@desktop`), which rewrites the marker and re-assembles
+  the gadget.
+- **If you must stay on the pre-#51 generation**, clear the override by hand and restart
+  the HID stack so kvmd-otg reassembles the default (desktop) gadget:
+  ```sh
+  rm -f /var/lib/kvmd/hidmode.yaml          # drop the mutable mode marker
+  # the /etc/kvmd/override.d/90-hidmode.yaml symlink now dangles → kvmd ignores it
+  systemctl restart kvmd-otg kvmd           # reassemble default gadget + reload kvmd
+  ```
+  (Removing the `/var` marker is enough — the symlink target vanishing makes kvmd skip
+  the override; you do not need to touch `/etc`, which is generation-managed anyway.)
+
+Before a rollback that crosses #51, **switch the box back to desktop first** if you can
+still reach the control surface — that avoids the trap entirely.
+
 ## 1. Build the image and flash a spare medium
 
 The `rpi4` config gives **two** ways to produce a flashable medium — both build

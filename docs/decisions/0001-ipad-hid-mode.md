@@ -163,6 +163,26 @@ gap — the write and the re-assembly are one operation, so the persisted mode a
 the assembled gadget never drift apart. That is why "just write the config file"
 is insufficient.
 
+### Rollback trap (a consequence of persist-across-upgrade)
+
+The very property that makes the mode survive upgrades — `90-hidmode.yaml` is a
+runtime `/var` symlink placed by tmpfiles, **not** a file in the generation's
+`/etc` closure — means a rollback can't retract it. tmpfiles creates but does not
+declaratively remove, so rolling back to a **pre-#51 generation** leaves both the
+`/etc/kvmd/override.d/90-hidmode.yaml` symlink and `/var/lib/kvmd/hidmode.yaml` in
+place: a pre-#51 kvmd still reads the mode override — the runtime mode stays LIVE
+and applied while the hidMode control surface (`pikvm-hidmode@` units, the
+endpoint) is gone with the generation. iPad mode would persist with no in-band way
+to switch back.
+
+Recoverable, and **not a merge blocker**: re-deploy a #51 generation (restores the
+control surface), or remove `/etc/kvmd/override.d/90-hidmode.yaml` +
+`/var/lib/kvmd/hidmode*` by hand — note removing only the `/var` target leaves the
+`/etc` symlink dangling, which kvmd's override.d loader would then fail to read, so
+remove the symlink too. A proper fix is a follow-up: activation-time
+reconciliation that clears the `/etc` symlink + `/var` state when the hidMode
+feature is absent from the running generation.
+
 ### Option surface
 
 - `services.pikvm.kvmd.hidMode.enable` — the runtime switch apparatus. Default

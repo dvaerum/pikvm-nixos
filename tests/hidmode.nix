@@ -86,8 +86,30 @@
     got = json.loads(machine.succeed(
         f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
     ))
+    # GET reports the ASSEMBLED gadget (classified from configfs), not the marker.
+    # At the desktop seed the gadget is dual → observed=desktop, settled, and the
+    # marker (requested) agrees.
     assert got["mode"] == "desktop", got
-    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"
+    assert got["observed"] == "desktop", got
+    assert got["requested"] == "desktop", got
+    assert got["settled"] is True, got
+    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"  # CLI get = marker (intent)
+
+    # CORRECTNESS PROPERTY (the reason this endpoint classifies configfs instead
+    # of trusting the marker): induce a marker/gadget DRIFT — write the marker to
+    # "ipad" WITHOUT reassembling — and confirm GET reports the gadget's REAL mode
+    # (desktop) and flags the disagreement, rather than the lying marker. This is
+    # exactly the failed/partial-switch case a marker-reporting endpoint would
+    # misreport as ipad, sending the MCP to drive relative into an absolute gadget.
+    machine.succeed("echo ipad > /var/lib/kvmd/hidmode")
+    drift = json.loads(machine.succeed(
+        f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
+    ))
+    assert drift["requested"] == "ipad", drift      # marker = intent (lying here)
+    assert drift["observed"] == "desktop", drift     # gadget = truth
+    assert drift["mode"] == "desktop", drift          # the MCP follows the gadget, not the marker
+    assert drift["settled"] is True, drift            # the gadget still cleanly classifies
+    machine.succeed("echo desktop > /var/lib/kvmd/hidmode")  # restore marker to match reality
 
     # (3) SWITCH to ipad via POST. Non-blocking → poll the marker for the flip.
     r = json.loads(machine.succeed(
@@ -111,11 +133,15 @@
     # green-by-not-triggering (it also holds if kvmd-otg assembled nothing).
     machine.wait_until_fails("test -e /dev/kvmd-hid-mouse-alt")
     machine.succeed("test -e /dev/kvmd-hid-mouse")
-    # GET now reports ipad.
+    # GET now reports ipad — from the ASSEMBLED gadget (single relative mouse),
+    # with the marker agreeing and settled true.
     got2 = json.loads(machine.succeed(
         f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
     ))
     assert got2["mode"] == "ipad", got2
+    assert got2["observed"] == "ipad", got2
+    assert got2["requested"] == "ipad", got2
+    assert got2["settled"] is True, got2
 
     # (4) SWITCH BACK to desktop → the mouse-alt node reappears (dual restored),
     # proving the switch is reversible and not a one-way latch.

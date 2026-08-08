@@ -54,8 +54,10 @@ appliance as the single source of truth for "current mode."
 - **"Current mode" is not a clean kvmd-native field.** `GET /api/hid` exposes
   `result.hid.mouse.outputs.{active,available}`, but `available` is **empty**
   and `active` is `""` in single-mouse (iPad) mode. It reflects assembled
-  topology, not our desktop/iPad abstraction, so the appliance's own marker file
-  is the authoritative current-mode source; kvmd's field only corroborates.
+  topology, not our desktop/iPad abstraction. The endpoint instead classifies the
+  **assembled gadget** directly (configfs descriptor-sha — see the API section and
+  "Reported mode = the assembled gadget" below) as the authoritative current-mode;
+  the marker is intent/persistence only.
 
 ## Decision
 
@@ -68,7 +70,9 @@ writes it and restarts the gadget.
 
 1. **Mutable state (persists in `/var`).**
    - `/var/lib/kvmd/hidmode` — plain marker, `"desktop"` | `"ipad"`
-     (`kvmd:kvmd`). Authoritative current-mode; what the API returns.
+     (`kvmd:kvmd`). This is INTENT: what to assemble on boot, and what the last
+     switch requested — NOT what the API reports as current (see the API section
+     and "Reported mode = the assembled gadget" below).
    - `/var/lib/kvmd/hidmode.yaml` — the override kvmd reads (regenerated on each
      switch from the canonical per-mode document).
 2. **Read-last override.** `/etc/kvmd/override.d/90-hidmode.yaml` is a symlink
@@ -92,9 +96,16 @@ writes it and restarts the gadget.
    — the debug path when the endpoint itself is broken.
 5. **API + MCP** (separate `pikvm-hidmode-endpoint.nix`, clones
    `hid-recovery-endpoint.nix`): loopback token server.
-   - `GET /hidmode` → reads the marker → `{"mode":"desktop|ipad"}`. This is the
-     first-class current-mode field the MCP reads (appliance = single source of
-     truth).
+   - `GET /hidmode` → classifies the **assembled gadget** (see "Reported mode =
+     the assembled gadget" below) → `{"ok":true, "mode": "desktop"|"ipad"|null,
+     "requested": <marker>, "observed": <assembled>, "settled": <bool>}`. `mode`
+     = the assembled gadget (the ground truth the MCP follows), `null` while
+     mid-reassembly/unrecognised. This is the first-class current-mode field the
+     MCP reads (appliance = single source of truth). The MCP **fail-closes** when
+     the endpoint is unreachable OR `settled` is false — it never falls back to a
+     declared target (a second copy of the mode is exactly #51's defect). Note an
+     ABSENT endpoint (stock, no `PIKVM_HIDMODE_URL`) ≠ unreachable: with the
+     feature absent the MCP uses its declared target and never refuses.
    - `POST /hidmode {"mode":"ipad"}` → token-auth → `systemctl start
      pikvm-hidmode@ipad` → `{"ok":true,"message":"mode switching, wait ~Ns; USB
      re-enumerates, active session drops"}` (honest, non-locking).
@@ -108,6 +119,32 @@ writes it and restarts the gadget.
    change and never resets the mode. `hidMode.default` is therefore a
    **first-boot** default only; there is deliberately no `hidMode.force` flag
    (add it only if a "rebuild forces mode" need is proven).
+
+### Reported mode = the assembled gadget, not the marker
+
+`GET /hidmode` reports what the USB device ACTUALLY IS, not what was asked for.
+The marker is written by `pikvm-hidmode` **before** kvmd-otg reassembles, so
+between "marker written" and "gadget reassembled" — or after a failed/partial
+switch — the marker is confidently wrong. Reporting it would make the MCP
+resolver drive the wrong mode: relative emits into an absolute gadget is a silent
+no-op on the iPad, and the click path can report a tap it never landed. The MCP's
+fail-closed logic guards *unreachable*, not *authoritatively wrong*. This is the
+#49 "deployed ≠ live" class one level deeper, and it was measured live on pikvm01
+(kvmd-otg unrestarted since boot while `override.yaml` was newer — the assembled
+gadget predated the config file).
+
+So the endpoint **classifies the assembled gadget** from configfs: the mouse HID
+functions LINKED into the active config (`configs/*/hid.*`, **not** the
+`functions/` pool — the pool keeps removed functions readable and would report a
+removed mouse as present) by report_descriptor **sha256** (+ mouse count). One
+relative mouse and no absolute ⇒ `ipad`; one absolute (primary) + one relative
+(mouse_alt) ⇒ `desktop`; anything else — absent gadget, mid-reassembly, or an
+unrecognised descriptor ⇒ `null` (settling), never a stale/wrong mode. The
+discriminator is the descriptor sha (it-03400's gate classifier, re-derived on
+4.188) — deliberately **not** proto/subclass (the stock relative maker already
+reads 2/1) and **not** a report_length constant. The marker stays as
+persistence/seed and rides along as `requested`; `requested != observed` after
+settling is a drift signal nothing previously detected.
 
 ### Why the switch restarts kvmd-otg then kvmd (not "just write the file")
 

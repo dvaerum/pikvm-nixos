@@ -35,18 +35,68 @@ let
     PORT = int(os.environ["PORT"])
     MODES = {"desktop", "ipad"}
     MARKER = "/var/lib/kvmd/hidmode"
+    GADGET = "/sys/kernel/config/usb_gadget/kvmd"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
 
-    def current_mode():
-        # The marker is the authoritative current-mode (kvmd's /api/hid can't
-        # represent single/ipad cleanly). Unseeded → the faithful default.
+    # kvmd 4.188 mouse report_descriptor sha256s (it-03400 re-derived on 4.188).
+    # Mode is classified by descriptor SHA (+ mouse count) per the #51 ruling —
+    # NOT proto/subclass (the stock relative maker already reads 2/1) and NOT a
+    # report_length constant. An unrecognised descriptor => observed=None => the
+    # MCP fail-closes (safe). Pinned to 4.188; a kvmd bump that changes the
+    # descriptor bytes makes observe() return None until these are refreshed.
+    REL_SHAS = {
+        "55c045b2daf5c91fd72fd8e1821e02a41c4118ea1badfdf4644e6db3d9970eed",  # relative, horizontal_wheel=false (ipad)
+        "92155ddf022d4091f5e15eea5871107cd6ff7a4e6ada0ef931bd14b86c5632d0",  # relative, horizontal_wheel=true
+    }
+    ABS_SHAS = {
+        "d9b93f5aa0cb2ab2f041d8c2da5f5b6c527e74192e2f1efa15c4844bec079621",  # absolute, horizontal_wheel=false
+        "3a71a5a23705ee80a711e143d1242e34cb5d85592d4b5e6ac3f20bf8b9830a12",  # absolute, horizontal_wheel=true
+    }
+
+    def requested_mode():
+        # The marker = INTENT: what pikvm-hidmode wrote + what the box assembles
+        # on boot. Persistence/seed only — NOT what the endpoint reports as the
+        # current mode (the marker is written BEFORE kvmd-otg reassembles, so a
+        # failed/partial switch leaves it lying). Unseeded => the faithful default.
         try:
             with open(MARKER, "r") as fh:
                 mode = fh.read().strip()
         except FileNotFoundError:
             return "desktop"
         return mode if mode in MODES else "desktop"
+
+    def observed_mode():
+        # The ASSEMBLED gadget is ground truth. Classify the mouse HID functions
+        # LINKED into the active config (configs/*/hid.* — NOT the functions/
+        # pool, which keeps removed functions readable and would report a removed
+        # mouse as present) by report_descriptor sha256:
+        #   ipad    = exactly one RELATIVE mouse, no absolute (single relative).
+        #   desktop = one ABSOLUTE (primary) + one RELATIVE (mouse_alt) — dual.
+        # Returns None when the gadget is absent / mid-reassembly / an
+        # unrecognised topology => the caller reports "settling", never a stale
+        # or wrong mode.
+        import glob, hashlib
+        if not os.path.isdir(GADGET):
+            return None  # torn down mid-switch — nothing to classify
+        abs_n = rel_n = 0
+        for link in glob.glob(GADGET + "/configs/*/hid.*"):
+            if not os.path.islink(link):
+                continue
+            try:
+                with open(os.path.join(os.path.realpath(link), "report_desc"), "rb") as fh:
+                    sha = hashlib.sha256(fh.read()).hexdigest()
+            except OSError:
+                continue
+            if sha in ABS_SHAS:
+                abs_n += 1
+            elif sha in REL_SHAS:
+                rel_n += 1
+        if abs_n == 0 and rel_n == 1:
+            return "ipad"
+        if abs_n == 1 and rel_n == 1:
+            return "desktop"
+        return None  # 0 mice / partial / unexpected => unknown (settling)
 
     class Handler(BaseHTTPRequestHandler):
         def _send_json(self, code, obj):
@@ -66,12 +116,25 @@ let
             return bool(token) and hmac.compare_digest(token, TOKEN)
 
         def do_GET(self):
-            # Read-only current-mode ground truth for the MCP to follow.
             if self.path.rstrip("/") != "/hidmode":
                 return self.reply(404, False, "not found")
             if not self._authorized():
                 return self.reply(401, False, "unauthorized")
-            return self._send_json(200, {"ok": True, "mode": current_mode()})
+            requested = requested_mode()
+            observed = observed_mode()
+            # `mode` is the ASSEMBLED gadget (the ground truth the MCP follows),
+            # NOT the marker: null while mid-reassembly/unrecognised so the MCP
+            # fail-closes on its settling gate instead of driving the wrong mode.
+            # `requested` (marker) + `settled` ride along: requested != observed
+            # after settling = the switch didn't take (a drift signal nothing
+            # detected before).
+            return self._send_json(200, {
+                "ok": True,
+                "mode": observed,
+                "requested": requested,
+                "observed": observed,
+                "settled": observed is not None,
+            })
 
         def do_POST(self):
             if self.path.rstrip("/") != "/hidmode":
@@ -86,8 +149,12 @@ let
             mode = payload.get("mode", "")
             if mode not in MODES:
                 return self.reply(400, False, "unknown mode (want desktop|ipad)")
-            if mode == current_mode():
-                return self._send_json(200, {"ok": True, "mode": mode, "message": "already in %s" % mode})
+            # Skip the switch only if the ASSEMBLED gadget is already this mode —
+            # comparing against observed (not the marker) so a marker/gadget
+            # drift (a prior failed switch) still triggers a corrective reassembly
+            # instead of being no-op'd away.
+            if mode == observed_mode():
+                return self._send_json(200, {"ok": True, "mode": mode, "message": "already in %s (gadget confirms)" % mode})
             unit = "pikvm-hidmode@%s.service" % mode
             # --no-block: non-locking. The switch proceeds async (the gadget
             # re-assembles, USB re-enumerates, kvmd restarts). The client polls

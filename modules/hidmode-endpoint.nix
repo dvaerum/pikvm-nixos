@@ -34,7 +34,7 @@ let
 
     PORT = int(os.environ["PORT"])
     MODES = {"desktop", "ipad"}
-    MARKER = "/var/lib/kvmd/hidmode"
+    OVERRIDE = "/var/lib/kvmd/hidmode.yaml"
     GADGET = "/sys/kernel/config/usb_gadget/kvmd"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
@@ -55,16 +55,30 @@ let
     }
 
     def requested_mode():
-        # The marker = INTENT: what pikvm-hidmode wrote + what the box assembles
-        # on boot. Persistence/seed only — NOT what the endpoint reports as the
-        # current mode (the marker is written BEFORE kvmd-otg reassembles, so a
-        # failed/partial switch leaves it lying). Unseeded => the faithful default.
+        # The NEXT-BOOT mode = the boot-authoritative override kvmd-otg assembles
+        # from: /var/lib/kvmd/hidmode.yaml, read LAST via override.d/90-hidmode.yaml.
+        # This is the SINGLE source (#53) — there is no parallel marker to drift
+        # from it. Classify by the topology keys the mode owns (mouse.absolute +
+        # mouse_alt.device). `pikvm-hidmode set` writes this file ATOMICALLY and as
+        # JSON (toJSON, a YAML subset), so json.load parses it. Absent / torn /
+        # malformed / hand-edited-YAML => None => the drift diagnostic simply doesn't
+        # fire (fail-closed: never a wrong next-boot mode). NOT the reported current
+        # mode — that is observed_mode() (the assembled gadget); this only rides
+        # along as `requested`, and requested != observed after settling = the box
+        # is primed to boot into a different mode than it runs now (#44's signal).
         try:
-            with open(MARKER, "r") as fh:
-                mode = fh.read().strip()
-        except FileNotFoundError:
+            with open(OVERRIDE, "r") as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        hid = (doc.get("kvmd") or {}).get("hid") or {}
+        absolute = (hid.get("mouse") or {}).get("absolute")
+        alt = (hid.get("mouse_alt") or {}).get("device")
+        if absolute is False and alt == "":
+            return "ipad"
+        if absolute is True and alt:
             return "desktop"
-        return mode if mode in MODES else "desktop"
+        return None
 
     def observed_mode():
         # The ASSEMBLED gadget is ground truth. Classify the mouse HID functions
@@ -123,11 +137,12 @@ let
             requested = requested_mode()
             observed = observed_mode()
             # `mode` is the ASSEMBLED gadget (the ground truth the MCP follows),
-            # NOT the marker: null while mid-reassembly/unrecognised so the MCP
+            # NOT the config: null while mid-reassembly/unrecognised so the MCP
             # fail-closes on its settling gate instead of driving the wrong mode.
-            # `requested` (marker) + `settled` ride along: requested != observed
-            # after settling = the switch didn't take (a drift signal nothing
-            # detected before).
+            # `requested` (the boot-authoritative yaml = next-boot mode) + `settled`
+            # ride along: requested != observed after settling = the box runs one
+            # mode now but is primed to boot into the other (a drift signal nothing
+            # detected before — see #53/#44).
             return self._send_json(200, {
                 "ok": True,
                 "mode": observed,
@@ -150,9 +165,9 @@ let
             if mode not in MODES:
                 return self.reply(400, False, "unknown mode (want desktop|ipad)")
             # Skip the switch only if the ASSEMBLED gadget is already this mode —
-            # comparing against observed (not the marker) so a marker/gadget
-            # drift (a prior failed switch) still triggers a corrective reassembly
-            # instead of being no-op'd away.
+            # comparing against observed (not the requested config) so a
+            # config/gadget drift (a prior failed switch) still triggers a
+            # corrective reassembly instead of being no-op'd away.
             if mode == observed_mode():
                 return self._send_json(200, {"ok": True, "mode": mode, "message": "already in %s (gadget confirms)" % mode})
             unit = "pikvm-hidmode@%s.service" % mode

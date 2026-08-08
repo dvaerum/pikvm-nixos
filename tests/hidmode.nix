@@ -53,8 +53,11 @@
     machine.wait_for_unit("kvmd.service")
     machine.wait_for_unit("pikvm-hidmode-endpoint.service")
 
-    # (1) SEED = desktop (faithful fresh-install default).
-    assert machine.succeed("cat /var/lib/kvmd/hidmode").strip() == "desktop"
+    # (1) SEED = desktop (faithful fresh-install default). The single source is
+    # the boot-authoritative override; the CLI `get` classifies it. There is NO
+    # parallel marker file (#53 collapsed to one source).
+    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"
+    machine.succeed("test ! -e /var/lib/kvmd/hidmode")
 
     # The mode is wired in as the LAST-read override.d drop-in: a symlink at 90-
     # (sorts after 00/10) pointing into the mutable /var file.
@@ -88,38 +91,52 @@
     got = json.loads(machine.succeed(
         f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
     ))
-    # GET reports the ASSEMBLED gadget (classified from configfs), not the marker.
-    # At the desktop seed the gadget is dual → observed=desktop, settled, and the
-    # marker (requested) agrees.
+    # GET reports the ASSEMBLED gadget (classified from configfs), not the config.
+    # At the desktop seed the gadget is dual → observed=desktop, settled, and
+    # requested (classified from the boot-authoritative yaml) agrees.
     assert got["mode"] == "desktop", got
     assert got["observed"] == "desktop", got
     assert got["requested"] == "desktop", got
     assert got["settled"] is True, got
-    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"  # CLI get = marker (intent)
+    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"  # CLI get classifies the same yaml
 
-    # CORRECTNESS PROPERTY (the reason this endpoint classifies configfs instead
-    # of trusting the marker): induce a marker/gadget DRIFT — write the marker to
-    # "ipad" WITHOUT reassembling — and confirm GET reports the gadget's REAL mode
-    # (desktop) and flags the disagreement, rather than the lying marker. This is
-    # exactly the failed/partial-switch case a marker-reporting endpoint would
-    # misreport as ipad, sending the MCP to drive relative into an absolute gadget.
-    machine.succeed("echo ipad > /var/lib/kvmd/hidmode")
+    # CORRECTNESS PROPERTY — torn-write / next-boot drift (#53). The
+    # boot-authoritative override (/var/lib/kvmd/hidmode.yaml, what kvmd-otg
+    # assembles from) is the SINGLE source of the next-boot mode. Simulate a torn
+    # switch: point the yaml at ipad WITHOUT re-assembling the gadget. GET must
+    # report `requested` = ipad (the yaml = what boots next) while `observed`/`mode`
+    # stay desktop (the gadget's real NOW), so the divergence is visible and the
+    # MCP still drives the true assembled mode. Pre-#53 `requested` read a parallel
+    # /var marker written AFTER the yaml, so this exact case (yaml=new, marker=old)
+    # reported requested==observed and the drift went undetected — #44's blind
+    # spot, closed here by construction.
+    machine.succeed(
+        "printf '%s' "
+        "'{\"kvmd\":{\"hid\":{\"mouse\":{\"absolute\":false,\"horizontal_wheel\":false},"
+        "\"mouse_alt\":{\"device\":\"\"}}}}' > /var/lib/kvmd/hidmode.yaml"
+    )
     drift = json.loads(machine.succeed(
         f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
     ))
-    assert drift["requested"] == "ipad", drift      # marker = intent (lying here)
-    assert drift["observed"] == "desktop", drift     # gadget = truth
-    assert drift["mode"] == "desktop", drift          # the MCP follows the gadget, not the marker
-    assert drift["settled"] is True, drift            # the gadget still cleanly classifies
-    machine.succeed("echo desktop > /var/lib/kvmd/hidmode")  # restore marker to match reality
+    assert drift["requested"] == "ipad", drift       # yaml = next-boot (authoritative)
+    assert drift["observed"] == "desktop", drift      # gadget = truth NOW
+    assert drift["mode"] == "desktop", drift           # the MCP follows the gadget, not the config
+    assert drift["settled"] is True, drift             # the gadget still cleanly classifies
+    # restore the yaml to the desktop shape so the POST switch below starts clean
+    machine.succeed(
+        "printf '%s' "
+        "'{\"kvmd\":{\"hid\":{\"mouse\":{\"absolute\":true},"
+        "\"mouse_alt\":{\"device\":\"/dev/kvmd-hid-mouse-alt\"}}}}' > /var/lib/kvmd/hidmode.yaml"
+    )
 
-    # (3) SWITCH to ipad via POST. Non-blocking → poll the marker for the flip.
+    # (3) SWITCH to ipad via POST. Non-blocking → poll the next-boot mode (the
+    # boot-authoritative yaml, via the CLI) for the flip.
     r = json.loads(machine.succeed(
         "curl -s -X POST -H 'Authorization: Bearer " + tok + "' "
         "-d '{\"mode\":\"ipad\"}' http://127.0.0.1:8083/hidmode"
     ))
     assert r["ok"] and r["mode"] == "ipad", r
-    machine.wait_until_succeeds("test \"$(cat /var/lib/kvmd/hidmode)\" = ipad")
+    machine.wait_until_succeeds("test \"$(pikvm-hidmode get)\" = ipad")
     machine.wait_for_unit("kvmd-otg.service")
     machine.wait_for_unit("kvmd.service")
 
@@ -128,6 +145,11 @@
     assert d2["kvmd"]["hid"]["mouse"]["absolute"] is False, d2
     assert d2["kvmd"]["hid"]["mouse"]["horizontal_wheel"] is False, d2
     assert d2["kvmd"]["hid"]["mouse_alt"]["device"] == "", d2
+    # … written ATOMICALLY (#53): no torn/partial override and no leftover temp
+    # (`hidmode.yaml.XXXXXX`) residue from the temp+rename install.
+    assert machine.succeed(
+        "find /var/lib/kvmd -maxdepth 1 -name 'hidmode.yaml.*' | wc -l"
+    ).strip() == "0"
     # … and the GADGET re-assembled to single-mouse: mouse-alt node is GONE,
     # primary mouse still present. Measured against the step-(1) positive control
     # in this SAME continuous run — do NOT split these three phases (present →
@@ -136,7 +158,7 @@
     machine.wait_until_fails("test -e /dev/kvmd-hid-mouse-alt")
     machine.succeed("test -e /dev/kvmd-hid-mouse")
     # GET now reports ipad — from the ASSEMBLED gadget (single relative mouse),
-    # with the marker agreeing and settled true.
+    # with requested (the boot-authoritative yaml) agreeing and settled true.
     got2 = json.loads(machine.succeed(
         f"curl -s -H 'Authorization: Bearer {tok}' http://127.0.0.1:8083/hidmode"
     ))
@@ -151,7 +173,7 @@
         "curl -s -X POST -H 'Authorization: Bearer " + tok + "' "
         "-d '{\"mode\":\"desktop\"}' http://127.0.0.1:8083/hidmode"
     )
-    machine.wait_until_succeeds("test \"$(cat /var/lib/kvmd/hidmode)\" = desktop")
+    machine.wait_until_succeeds("test \"$(pikvm-hidmode get)\" = desktop")
     machine.wait_for_unit("kvmd-otg.service")
     machine.wait_until_succeeds("test -e /dev/kvmd-hid-mouse-alt")
   '';

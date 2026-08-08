@@ -8,8 +8,9 @@ Follows: [0001 — Runtime iPad/desktop HID mode switch](0001-ipad-hid-mode.md).
 
 ADR 0001 gives the appliance three intended control surfaces for the runtime
 HID-mode switch — **API**, **UI**, **MCP** — over one authoritative
-`/var/lib/kvmd/hidmode` marker. The switch mechanism (marker + `90-hidmode.yaml`
-override + the `pikvm-hidmode@` executor) and the **API/MCP** surface (the
+`/var/lib/kvmd/hidmode.yaml` override (the single source of the mode; #53 removed
+the old parallel marker). The switch mechanism (the override + `90-hidmode.yaml`
+symlink + the `pikvm-hidmode@` executor) and the **API/MCP** surface (the
 loopback token endpoint, `modules/hidmode-endpoint.nix`) landed with 0001. This
 ADR adds the **UI** surface.
 
@@ -69,7 +70,7 @@ Four properties, each load-bearing:
 
 - `GET /hidmode` on load → shows current mode. The endpoint (post-#41) reports the
   **assembled** gadget: `{mode(=observed), requested, observed, settled}`, not just
-  the marker.
+  the requested config.
 - On the toggle: a **confirm dialog** warning the switch re-plugs the target's
   USB and drops the session (~5 s, the same as a kvmd restart);
 - then `POST /hidmode {"mode": …}` — **non-blocking** — with honest in-flight
@@ -80,8 +81,8 @@ Four properties, each load-bearing:
 - **Drift surfacing — the next-boot hazard, not "the switch failed":** `mode ==
   observed`, so the page is already correct about the present and offers the button
   that reconciles a half-failed switch — a user just clicks again. The subtler
-  hazard is that the **marker (`requested`) drives the next boot**: when `requested
-  != observed` the box runs one mode now but is primed to boot the other, and
+  hazard is that the **persisted override (`requested`) drives the next boot**: when
+  `requested != observed` the box runs one mode now but is primed to boot the other, and
   someone who reads the current mode and later reboots for an unrelated reason gets
   a silently different target. So on `settled && requested != observed` the page
   warns **which mode the box will boot into** ("saved mode is X … will boot into X
@@ -117,4 +118,4 @@ follow-up.
   **assembly-verified and never behaviourally proven** — a UI that drives the
   switch does not make the target's iPad move a pointer; that remains the iPad
   rig's gate behind the cabling dependency. The control page is honest about what
-  it confirms (the appliance marker), and claims nothing about the target.
+  it confirms (the appliance's assembled gadget), and claims nothing about the target.

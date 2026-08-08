@@ -46,10 +46,10 @@ let
   desktopYaml = pkgs.writeText "hidmode-desktop.yaml" (builtins.toJSON desktopSettings);
   ipadYaml = pkgs.writeText "hidmode-ipad.yaml" (builtins.toJSON ipadSettings);
 
-  # First-boot seed values (tmpfiles `C` copies these ONCE; never clobbered on
-  # redeploy, so the runtime choice persists — see ADR).
+  # First-boot seed value (tmpfiles `C` copies it ONCE; never clobbered on
+  # redeploy, so the runtime choice persists — see ADR). This override is the
+  # SINGLE source of the mode (#53) — there is no separate marker to seed.
   defaultYaml = if cfg.default == "ipad" then ipadYaml else desktopYaml;
-  defaultMarker = pkgs.writeText "hidmode-default-marker" "${cfg.default}\n";
 
   # The privileged executor: `pikvm-hidmode {get|set <mode>}`. Store paths for
   # the two canonical docs are injected here so BOTH the local CLI and the
@@ -157,10 +157,10 @@ in
   };
 
   config = lib.mkIf (kvmdCfg.enable && cfg.enable) {
-    # Seed the mutable state ONCE (C, not C+ → never clobbered on redeploy).
-    # /var/lib/kvmd itself is created by the kvmd module.
+    # Seed the mutable override ONCE (C, not C+ → never clobbered on redeploy).
+    # /var/lib/kvmd itself is created by the kvmd module. This single file is the
+    # source of the mode (#53); pikvm-hidmode rewrites it atomically.
     systemd.tmpfiles.rules = [
-      "C /var/lib/kvmd/hidmode 0644 kvmd kvmd - ${defaultMarker}"
       "C /var/lib/kvmd/hidmode.yaml 0644 kvmd kvmd - ${defaultYaml}"
     ];
 

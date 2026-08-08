@@ -173,26 +173,28 @@ if [ -n "$EXPECTED_GEN" ]; then
 	echo "generation MATCHES the pre-computed expectation for $DEPLOY_REF"
 fi
 
-# THE MARKER IS WHAT A REDEPLOY ACTUALLY THREATENS — not the gadget.
-# A redeploy deliberately does NOT restart kvmd-otg (the mutable mode files are
+# THE PERSISTED OVERRIDE IS WHAT A REDEPLOY ACTUALLY THREATENS — not the gadget.
+# A redeploy deliberately does NOT restart kvmd-otg (the mutable mode file is
 # kept out of restartTriggers), so the assembled gadget survives untouched and a
 # gadget-only comparison is close to a tautology. What a redeploy COULD destroy
-# is the mode marker — a tmpfiles rule reseeding it, an activation script
-# rewriting it. That damage is INVISIBLE in the gadget: the mode keeps looking
-# correct until the next boot, then silently flips. So check the marker itself.
-marker_after="$(sh_remote 'cat /var/lib/kvmd/hidmode 2>/dev/null || echo "<absent>"')"
-echo "mode marker after deploy: $marker_after"
-if [ "$marker_after" != "$MODE" ]; then
+# is the persisted mode override (/var/lib/kvmd/hidmode.yaml) — a tmpfiles rule
+# reseeding it, an activation script rewriting it. That damage is INVISIBLE in
+# the gadget: the mode keeps looking correct until the next boot, then silently
+# flips. So check the persisted mode itself, classified from the override
+# (#53 collapsed the old parallel marker into this single source).
+mode_after="$(sh_remote 'pikvm-hidmode get 2>/dev/null || echo "<absent>"')"
+echo "persisted mode after deploy: $mode_after"
+if [ "$mode_after" != "$MODE" ]; then
 	echo
-	echo "FAIL: the deploy CLOBBERED the mode marker." >&2
+	echo "FAIL: the deploy CLOBBERED the persisted mode override." >&2
 	echo "  expected: $MODE" >&2
-	echo "  actual  : $marker_after" >&2
+	echo "  actual  : $mode_after" >&2
 	echo "The running gadget may still look correct — a redeploy does not" >&2
 	echo "re-assemble it — so this would stay invisible until the next reboot," >&2
 	echo "which is precisely when a user would hit it." >&2
 	exit 1
 fi
-echo "marker SURVIVED the deploy (still '$MODE')"
+echo "persisted mode SURVIVED the deploy (still '$MODE')"
 
 otg_started_after="$(sh_remote 'systemctl show kvmd-otg -p ActiveEnterTimestamp --value')"
 if [ "$otg_started_before" = "$otg_started_after" ]; then
@@ -202,8 +204,8 @@ if [ "$otg_started_before" = "$otg_started_after" ]; then
 	echo "     This is the EXPECTED design — the mode files are deliberately kept"
 	echo "     out of restartTriggers so an update cannot disturb a live gadget."
 	echo "     What that means for this run: the gadget comparison below is close"
-	echo "     to a tautology, and the load-bearing evidence is the MARKER check"
-	echo "     above. Proof that the mode is correctly RE-DERIVED on a fresh"
+	echo "     to a tautology, and the load-bearing evidence is the PERSISTED-MODE"
+	echo "     check above. Proof that the mode is correctly RE-DERIVED on a fresh"
 	echo "     assembly comes from the REBOOT leg, not from this one."
 else
 	echo "kvmd-otg DID restart ($otg_started_before -> $otg_started_after), so the"

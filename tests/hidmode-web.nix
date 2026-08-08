@@ -7,7 +7,7 @@
 #     does not satisfy the endpoint's bearer check);
 #   - the client CANNOT smuggle its own Authorization (the proxy overrides it);
 #   - the token never appears in a served response;
-#   - the switch drives end-to-end through the proxy (POST → marker flips);
+#   - the switch drives end-to-end through the proxy (POST → assembled mode flips);
 #   - nginx -t is clean.
 #
 # MCP is OFF (endpoint.enable set explicitly) to skip onnxruntime and keep the VM
@@ -135,8 +135,8 @@
         "the control page must warn which mode the box will boot into on requested != observed"
 
     # --- (6) the switch drives end-to-end through the proxy ---------------
-    # POST is non-blocking; the marker flips after the gadget re-assembles + kvmd
-    # restarts. Poll GET (through the proxy) until it reflects ipad.
+    # POST is non-blocking; the assembled gadget flips after it re-assembles + kvmd
+    # restarts. Poll GET (through the proxy) until `mode` reflects ipad.
     post = machine.succeed(f"curl -sk {A} -X POST -H 'Content-Type: application/json' "
                            "-d '{\"mode\":\"ipad\"}' https://localhost/hidmode")
     pd = json.loads(post)

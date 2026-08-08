@@ -68,13 +68,13 @@ stock desktop (usb1 `3a71a5a2`, 3 functions, mouse-alt back).
   live kvmd invalidates HID). So the gadget follows on the **next boot**; the config is
   already correct. Self-healing on next boot, not instant.
 - **Residue (intentional):** only the `/etc` symlink is generation-managed; the `/var`
-  marker persists across the rollback. So rolling **forward** again (re-deploying #51)
+  override persists across the rollback. So rolling **forward** again (re-deploying #51)
   restores the control surface **and re-applies the persisted mode** — the box returns
   to its pre-rollback mode (e.g. ipad), **not** stock. Deliberate (mode preserved across
   the excursion); noted so it isn't discovered by surprise.
 
 **Legacy interim trap — only #51 builds from *before* #43.** Early #51 builds used a
-tmpfiles symlink that was *not* generation-managed, so both the `/var` marker AND the
+tmpfiles symlink that was *not* generation-managed, so both the `/var` override AND the
 `/etc` symlink outlived a rollback — the box stayed in its last mode and a full reboot
 did **not** clear it (a pre-#51 generation re-derived the mode from the leftover override
 every boot; it-03400 confirmed this on silicon). If you are on such an early build and a

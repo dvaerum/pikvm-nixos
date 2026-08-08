@@ -57,7 +57,8 @@ appliance as the single source of truth for "current mode."
   topology, not our desktop/iPad abstraction. The endpoint instead classifies the
   **assembled gadget** directly (configfs descriptor-sha — see the API section and
   "Reported mode = the assembled gadget" below) as the authoritative current-mode;
-  the marker is intent/persistence only.
+  the persisted next-boot mode is classified from the boot-authoritative override
+  (#53), not a separate marker.
 
 ## Decision
 
@@ -69,12 +70,15 @@ writes it and restarts the gadget.
 ### Mechanism
 
 1. **Mutable state (persists in `/var`).**
-   - `/var/lib/kvmd/hidmode` — plain marker, `"desktop"` | `"ipad"`
-     (`kvmd:kvmd`). This is INTENT: what to assemble on boot, and what the last
-     switch requested — NOT what the API reports as current (see the API section
-     and "Reported mode = the assembled gadget" below).
-   - `/var/lib/kvmd/hidmode.yaml` — the override kvmd reads (regenerated on each
-     switch from the canonical per-mode document).
+   - `/var/lib/kvmd/hidmode.yaml` (`kvmd:kvmd`) — the override kvmd reads,
+     regenerated on each switch from the canonical per-mode document. This is the
+     **single** persisted source of the mode (#53): it is both what kvmd-otg
+     assembles from on boot AND what `requested` is classified from — there is no
+     separate marker file that could drift from it. The switch rewrites it
+     **atomically** (write a temp in the same dir, then `mv` — a same-filesystem
+     rename, so a crash/power-loss leaves the OLD or NEW override, never a torn
+     one). NOT what the API reports as *current* — that is the assembled gadget
+     (see "Reported mode = the assembled gadget" below).
 2. **Read-last override.** `/etc/kvmd/override.d/90-hidmode.yaml` is a
    **generation-managed** `environment.etc` symlink → `/var/lib/kvmd/hidmode.yaml`
    (NOT a tmpfiles symlink — this is what lets it vanish on rollback; see
@@ -89,8 +93,8 @@ writes it and restarts the gadget.
      mouse_alt.device=""}`.
 3. **Write-and-restart control** (clones the hid-recovery two-module idiom — no
    sudo/setuid). A `pikvm-hidmode` executor (`writeShellApplication`) validates
-   the mode, installs the canonical YAML + writes the marker (`kvmd:kvmd`), then
-   restarts **kvmd-otg** (teardown → rebuild gadget = the USB re-enumerate)
+   the mode, installs the canonical YAML **atomically** (temp + rename, `kvmd:kvmd`),
+   then restarts **kvmd-otg** (teardown → rebuild gadget = the USB re-enumerate)
    **then** kvmd. It runs as root via a templated oneshot
    `pikvm-hidmode@%i.service`. A polkit rule lets **only** the endpoint user
    `start` **only** `pikvm-hidmode@` units.
@@ -100,7 +104,8 @@ writes it and restarts the gadget.
    `hid-recovery-endpoint.nix`): loopback token server.
    - `GET /hidmode` → classifies the **assembled gadget** (see "Reported mode =
      the assembled gadget" below) → `{"ok":true, "mode": "desktop"|"ipad"|null,
-     "requested": <marker>, "observed": <assembled>, "settled": <bool>}`. `mode`
+     "requested": <next-boot, classified from the override yaml>, "observed":
+     <assembled>, "settled": <bool>}`. `mode`
      = the assembled gadget (the ground truth the MCP follows), `null` while
      mid-reassembly/unrecognised. This is the first-class current-mode field the
      MCP reads (appliance = single source of truth). The MCP **fail-closes** when
@@ -113,23 +118,24 @@ writes it and restarts the gadget.
      re-enumerates, active session drops"}` (honest, non-locking).
    - Wires `PIKVM_HIDMODE_URL` + the token into the pikvm-mcp env, same as
      `PIKVM_HID_RECOVERY_URL`.
-6. **Persistence without clobber.** tmpfiles **`C`** (not `C+`) seeds the marker
-   + YAML to the declarative **default** (`hidMode.default`, default `desktop`)
+6. **Persistence without clobber.** tmpfiles **`C`** (not `C+`) seeds the override
+   YAML to the declarative **default** (`hidMode.default`, default `desktop`)
    **once** on fresh install; redeploy/reboot leaves `/var` untouched, so the
-   runtime choice persists. The mutable files are **not** in
+   runtime choice persists. The mutable file is **not** in
    `kvmdConfigTriggers`, so `nixos-rebuild switch` never restarts kvmd for a mode
    change and never resets the mode. `hidMode.default` is therefore a
    **first-boot** default only; there is deliberately no `hidMode.force` flag
    (add it only if a "rebuild forces mode" need is proven).
 
-### Reported mode = the assembled gadget, not the marker
+### Reported mode = the assembled gadget, not the requested config
 
 `GET /hidmode` reports what the USB device ACTUALLY IS, not what was asked for.
-The marker is written by `pikvm-hidmode` **before** kvmd-otg reassembles, so
-between "marker written" and "gadget reassembled" — or after a failed/partial
-switch — the marker is confidently wrong. Reporting it would make the MCP
-resolver drive the wrong mode: relative emits into an absolute gadget is a silent
-no-op on the iPad, and the click path can report a tap it never landed. The MCP's
+The override yaml (`requested`) is written by `pikvm-hidmode` **before** kvmd-otg
+reassembles, so between "override written" and "gadget reassembled" — or after a
+failed/partial switch — the config is ahead of the live gadget. Reporting it as
+*current* would make the MCP resolver drive the wrong mode: relative emits into an
+absolute gadget is a silent no-op on the iPad, and the click path can report a tap
+it never landed. The MCP's
 fail-closed logic guards *unreachable*, not *authoritatively wrong*. This is the
 #49 "deployed ≠ live" class one level deeper, and it was measured live on pikvm01
 (kvmd-otg unrestarted since boot while `override.yaml` was newer — the assembled
@@ -144,18 +150,23 @@ relative mouse and no absolute ⇒ `ipad`; one absolute (primary) + one relative
 unrecognised descriptor ⇒ `null` (settling), never a stale/wrong mode. The
 discriminator is the descriptor sha (it-03400's gate classifier, re-derived on
 4.188) — deliberately **not** proto/subclass (the stock relative maker already
-reads 2/1) and **not** a report_length constant. The marker stays as
-persistence/seed and rides along as `requested`; `requested != observed` after
-settling is a drift signal nothing previously detected.
+reads 2/1) and **not** a report_length constant. The override yaml is the
+persisted source and rides along as `requested`, classified from it — the
+boot-authoritative next-boot mode, torn-write-proof (#53). `requested != observed`
+after settling is a drift signal nothing previously detected: the box runs one
+mode now but will boot into the other. (`requested` is `null` for an
+unrecognised/absent override — fail-closed, so the drift diagnostic simply doesn't
+fire on a garbage config rather than guessing.)
 
 **Consumer contract** (so the field names don't invite the wrong read): drive on
 `mode`/`observed` — the authoritative assembled mode (`"desktop"|"ipad"`, or
 `null`/unrecognised while settling). `settled` means the gadget is
-**recognisable**, NOT that the *requested* switch succeeded: a failed switch
-returns `ok:true, settled:true` with `requested != observed`. So detect a
-failed/incomplete switch by comparing `requested` vs `observed` after settling —
-never by gating on `{ok, settled}`. A consumer that only ever drives the
-currently-assembled `mode` (fail-closed on `null`) is correct by construction.
+**recognisable**, NOT that the *requested* switch succeeded: a switch that hasn't
+taken effect yet (or failed) returns `ok:true, settled:true` with `requested !=
+observed`. So detect a next-boot-pending / failed switch by comparing `requested`
+(the yaml = what boots next) vs `observed` after settling — never by gating on
+`{ok, settled}`. A consumer that only ever drives the currently-assembled `mode`
+(fail-closed on `null`) is correct by construction.
 
 ### Why the switch restarts kvmd-otg then kvmd (not "just write the file")
 
@@ -180,7 +191,7 @@ is insufficient.
 naïve persist design (a tmpfiles symlink, which creates but never declaratively
 removes) would survive a rollback to a **pre-#51 generation** — leaving the mode
 override live and applied while the control surface (`pikvm-hidmode@` units + the
-endpoint) is gone. That is *worse* than the marker-reporting bug above, because
+endpoint) is gone. That is *worse* than the config-reporting bug above, because
 the **detector got rolled back too**: the MCP's static `--target` can then
 silently disagree with the stranded gadget mode (relative-into-absolute no-op,
 click path reporting positions it never hit), with no `/hidmode` left to
@@ -225,7 +236,7 @@ lands ipad, so making the symlink generation-managed did **not** cost
 mode-survives-a-reboot. The trap is closed without losing persistence.
 
 **Residue (intentional, documented so it isn't discovered by surprise):** only
-the `/etc` symlink is generation-managed; the `/var/lib/kvmd/hidmode.yaml` marker
+the `/etc` symlink is generation-managed; the `/var/lib/kvmd/hidmode.yaml` override
 **persists** across the rollback. So rolling **forward** again (re-deploying a
 #51 generation) restores the control surface **and re-applies the persisted
 mode** — the box returns to its pre-rollback mode (e.g. ipad), **not** stock.

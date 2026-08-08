@@ -59,7 +59,9 @@
     # The mode is wired in as the LAST-read override.d drop-in: a symlink at 90-
     # (sorts after 00/10) pointing into the mutable /var file.
     machine.succeed("test -L /etc/kvmd/override.d/90-hidmode.yaml")
-    tgt = machine.succeed("readlink /etc/kvmd/override.d/90-hidmode.yaml").strip()
+    # readlink -f: the entry is a generation-managed env.etc symlink (via
+    # /etc/static), so resolve the whole chain to the mutable /var target.
+    tgt = machine.succeed("readlink -f /etc/kvmd/override.d/90-hidmode.yaml").strip()
     assert tgt == "/var/lib/kvmd/hidmode.yaml", tgt
 
     # desktop override content: absolute primary mouse + mouse_alt present.

@@ -75,8 +75,10 @@ writes it and restarts the gadget.
      and "Reported mode = the assembled gadget" below).
    - `/var/lib/kvmd/hidmode.yaml` — the override kvmd reads (regenerated on each
      switch from the canonical per-mode document).
-2. **Read-last override.** `/etc/kvmd/override.d/90-hidmode.yaml` is a symlink
-   (placed by tmpfiles `L+`) → `/var/lib/kvmd/hidmode.yaml`. `90-` sorts after
+2. **Read-last override.** `/etc/kvmd/override.d/90-hidmode.yaml` is a
+   **generation-managed** `environment.etc` symlink → `/var/lib/kvmd/hidmode.yaml`
+   (NOT a tmpfiles symlink — this is what lets it vanish on rollback; see
+   "Rollback safety" below). `90-` sorts after
    `00`/`10`, so the mode wins over user `settings`; `override.yaml` stays empty
    so nothing beats it. kvmd's loader honours symlinks and ignores the
    extension, confirmed in source.
@@ -172,25 +174,42 @@ gap — the write and the re-assembly are one operation, so the persisted mode a
 the assembled gadget never drift apart. That is why "just write the config file"
 is insufficient.
 
-### Rollback trap (a consequence of persist-across-upgrade)
+### Rollback safety: persisted mode is inert without its controller
 
-The very property that makes the mode survive upgrades — `90-hidmode.yaml` is a
-runtime `/var` symlink placed by tmpfiles, **not** a file in the generation's
-`/etc` closure — means a rollback can't retract it. tmpfiles creates but does not
-declaratively remove, so rolling back to a **pre-#51 generation** leaves both the
-`/etc/kvmd/override.d/90-hidmode.yaml` symlink and `/var/lib/kvmd/hidmode.yaml` in
-place: a pre-#51 kvmd still reads the mode override — the runtime mode stays LIVE
-and applied while the hidMode control surface (`pikvm-hidmode@` units, the
-endpoint) is gone with the generation. iPad mode would persist with no in-band way
-to switch back.
+**The hazard:** state that outlives the code governing it is the #49 family. A
+naïve persist design (a tmpfiles symlink, which creates but never declaratively
+removes) would survive a rollback to a **pre-#51 generation** — leaving the mode
+override live and applied while the control surface (`pikvm-hidmode@` units + the
+endpoint) is gone. That is *worse* than the marker-reporting bug above, because
+the **detector got rolled back too**: the MCP's static `--target` can then
+silently disagree with the stranded gadget mode (relative-into-absolute no-op,
+click path reporting positions it never hit), with no `/hidmode` left to
+contradict it. The right property is that a rollback **reverts to stock** (our
+faithfulness rule) — persisted mode must be **inert without its controller**.
 
-Recoverable, and **not a merge blocker**: re-deploy a #51 generation (restores the
-control surface), or remove `/etc/kvmd/override.d/90-hidmode.yaml` +
-`/var/lib/kvmd/hidmode*` by hand — note removing only the `/var` target leaves the
-`/etc` symlink dangling, which kvmd's override.d loader would then fail to read, so
-remove the symlink too. A proper fix is a follow-up: activation-time
-reconciliation that clears the `/etc` symlink + `/var` state when the hidMode
-feature is absent from the running generation.
+**The fix (why point 2 uses `environment.etc`, not tmpfiles):** the read-last
+`90-hidmode.yaml` symlink is **generation-managed**. It is in every #51
+generation's `/etc` closure, so the mode still persists across #51→#51
+**upgrades**; but NixOS etc-activation removes entries not in the current
+generation, so a rollback to a pre-#51 generation **drops the symlink**, the
+override stops applying, and the box reverts to stock. The `/var` content persists
+but is simply no longer read. (VM-verified: the `environment.etc` symlink resolves
+through `/etc/static` to the `/var` target and kvmd reads it, switch and all;
+it-03400 confirms the revert-to-stock on real silicon.)
+
+**Timing caveat:** dropping the `/etc` symlink reverts the config **intent**
+immediately, but the assembled **gadget** only reverts on the next `kvmd-otg`
+restart — and `kvmd-otg` is deliberately NOT in `restartTriggers` (#49:
+re-assembling under live kvmd invalidates HID), so a rollback's
+`switch-to-configuration` will not re-assemble it. Until then the gadget retains
+the prior mode while the config no longer describes it (a self-healing-on-next-boot
+window, not instant). So the rollback HW check reads the descriptor sha **twice**:
+(3) immediately after rollback — may still show the old mode (the live window);
+(5) after a reboot — should be stock; still the old mode at (5) means the trap
+survives reboot and this fix is insufficient. Also inspect
+`/var/lib/kvmd/hidmode.yaml` at (5): still present + gadget desktop = confirmation
+the content is inert once unlinked. Recovery if ever stranded: a `kvmd-otg`
+restart / reboot (re-assemble from the now-stock config), or re-deploy #51.
 
 ### Option surface
 

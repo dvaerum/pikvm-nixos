@@ -157,14 +157,25 @@ in
   };
 
   config = lib.mkIf (kvmdCfg.enable && cfg.enable) {
-    # Seed the mutable state ONCE (C, not C+ → never clobbered on redeploy) and
-    # link it in as the LAST-read override.d drop-in (90- sorts after 00/10, so
-    # the mode wins). /var/lib/kvmd itself is created by the kvmd module.
+    # Seed the mutable state ONCE (C, not C+ → never clobbered on redeploy).
+    # /var/lib/kvmd itself is created by the kvmd module.
     systemd.tmpfiles.rules = [
       "C /var/lib/kvmd/hidmode 0644 kvmd kvmd - ${defaultMarker}"
       "C /var/lib/kvmd/hidmode.yaml 0644 kvmd kvmd - ${defaultYaml}"
-      "L+ /etc/kvmd/override.d/90-hidmode.yaml - - - - /var/lib/kvmd/hidmode.yaml"
     ];
+
+    # The LAST-read override.d drop-in (90- sorts after 00/10, so the mode wins)
+    # is a GENERATION-MANAGED symlink to the mutable /var content — deliberately
+    # environment.etc, NOT a tmpfiles symlink. This is the ROLLBACK FIX: env.etc
+    # puts it in every #51 generation's /etc closure (so the mode still persists
+    # across #51→#51 UPGRADES), but NixOS etc-activation REMOVES entries not in
+    # the current generation — so rolling back to a PRE-#51 generation drops this
+    # symlink, the override stops applying, and the box reverts to STOCK. A
+    # tmpfiles symlink would create-but-never-remove it, stranding the mode live
+    # with no control surface (units/endpoint gone). Property: persisted mode is
+    # INERT without its controller; safe rollback = revert-to-stock (faithfulness).
+    # The /var content persists but is simply no longer read once the link is gone.
+    environment.etc."kvmd/override.d/90-hidmode.yaml".source = "/var/lib/kvmd/hidmode.yaml";
 
     # Templated root oneshot: one instance per mode. %i (desktop|ipad) is passed
     # straight to the executor, which validates it.

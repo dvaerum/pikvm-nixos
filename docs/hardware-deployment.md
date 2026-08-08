@@ -49,50 +49,44 @@ step, not on the bench.
 
 ## HID-mode (iPad) rollback caveat — operator recovery
 
-The runtime desktop↔iPad HID switch (#51) persists the selected mode **outside the
-NixOS generation**: the executor writes `/var/lib/kvmd/hidmode.yaml` and the active
-config pulls it in via `/etc/kvmd/override.d/90-hidmode.yaml`, a symlink into `/var`
-that is deliberately not part of the generation (so a chosen mode survives OS
-upgrades). The design rationale for that placement is ADR-0001; this is the
-**operational** consequence and how to recover.
+The runtime desktop↔iPad HID switch (#51) persists the selected mode in
+`/var/lib/kvmd/hidmode.yaml`, pulled into the active config via the read-last
+`/etc/kvmd/override.d/90-hidmode.yaml` symlink. A chosen mode survives OS upgrades
+(#51→#51). The design rationale is ADR-0001; this is the **operational** consequence
+on rollback.
 
-**The trap (current/interim behaviour — survives reboot, manual recovery only):**
-in the interim design *both* pieces live outside the NixOS generation — the mode
-marker `/var/lib/kvmd/hidmode.yaml` **and** the `/etc/kvmd/override.d/90-hidmode.yaml`
-symlink that points at it. So rolling the OS back to a generation from *before* #51
-does **not** revert the HID mode, and **neither does a full reboot**: the rolled-back
-generation has no `pikvm-hidmode@` executor and no control surface (no web
-`/hidmode-control`, no `:8083` endpoint), but `kvmd-otg` still reads the leftover
-override on every boot and **re-derives/re-assembles the last mode**. Confirmed on
-silicon (it-03400): a pre-#51 generation re-derives **iPad** from the leftover override
-across a full reboot. So a box left in iPad mode and then rolled back stays in iPad mode
-(relative-only mouse, no second mouse) with nothing in the rolled-back image — and no
-reboot — to change it back. It reads as "the gadget is wrong and I can't fix it from
-the UI." There is **no self-healing**; recovery is manual.
+**FIXED (#43, merged — rollback reverts to stock, self-heals at next boot).** As of
+#43 the `90-hidmode.yaml` symlink is **generation-managed** (`environment.etc`): it is
+in every #51 generation's `/etc` closure (so mode still persists across upgrades), but
+NixOS etc-activation **drops** entries absent from the current generation, so a rollback
+to a pre-#51 generation removes the symlink and the box **reverts to stock (desktop)**
+with no manual step. HW-confirmed on silicon (it-03400): set ipad → roll back → reboot →
+stock desktop (usb1 `3a71a5a2`, 3 functions, mouse-alt back).
+- **Timing:** dropping the symlink reverts the config **intent** immediately, but the
+  assembled **gadget** reverts on the next `kvmd-otg` restart / boot — and per #49 a
+  rollback's `switch-to-configuration` does NOT restart `kvmd-otg` (re-assembling under
+  live kvmd invalidates HID). So the gadget follows on the **next boot**; the config is
+  already correct. Self-healing on next boot, not instant.
+- **Residue (intentional):** only the `/etc` symlink is generation-managed; the `/var`
+  marker persists across the rollback. So rolling **forward** again (re-deploying #51)
+  restores the control surface **and re-applies the persisted mode** — the box returns
+  to its pre-rollback mode (e.g. ipad), **not** stock. Deliberate (mode preserved across
+  the excursion); noted so it isn't discovered by surprise.
 
-**Recovery (manual — pick one):**
-- **Roll forward to #51-or-newer** — the control surface returns; switch back to desktop
-  the normal way (web `/hidmode-control`, or `systemctl start pikvm-hidmode@desktop`),
-  which rewrites the marker and re-assembles the gadget.
-- **If you must stay on the pre-#51 generation**, remove the leftover override by hand and
-  restart the HID stack so `kvmd-otg` reassembles the default (desktop) gadget
-  (verified on silicon by it-03400):
-  ```sh
-  rm -f /etc/kvmd/override.d/90-hidmode.yaml   # remove the leftover mode override
-  systemctl restart kvmd-otg kvmd              # reassemble default gadget + reload kvmd
-  ```
-  (Deleting `/var/lib/kvmd/hidmode.yaml` too is harmless belt-and-suspenders, but
-  removing the `/etc` override is the load-bearing step in the interim design.)
+**Legacy interim trap — only #51 builds from *before* #43.** Early #51 builds used a
+tmpfiles symlink that was *not* generation-managed, so both the `/var` marker AND the
+`/etc` symlink outlived a rollback — the box stayed in its last mode and a full reboot
+did **not** clear it (a pre-#51 generation re-derived the mode from the leftover override
+every boot; it-03400 confirmed this on silicon). If you are on such an early build and a
+rollback stranded the box in iPad mode, recover manually:
+```sh
+rm -f /etc/kvmd/override.d/90-hidmode.yaml   # remove the leftover mode override
+systemctl restart kvmd-otg kvmd              # reassemble default gadget + reload kvmd
+```
+Fresh deploys on #43-or-newer don't need this — the symlink drops itself on rollback.
 
-Before a rollback that crosses #51, **switch the box back to desktop first** if you can
-still reach the control surface — that avoids the trap entirely.
-
-> **Fix in flight (#43):** the option-1 change makes the `90-hidmode.yaml` symlink
-> **generation-managed** (via `environment.etc`), so it **vanishes on a rollback** and
-> the box reverts to stock (desktop) with no manual step. Once #43 lands, this section
-> flips to *"fixed — rollback reverts to stock on next boot"* (the gadget reverts at the
-> next `kvmd-otg` restart / boot; per #49 a rollback does not restart `kvmd-otg`, so the
-> config intent is correct immediately and the live gadget follows on the next boot).
+Regardless of build, before a rollback that crosses #51 it's still cleanest to **switch
+the box back to desktop first** if you can reach the control surface.
 
 ## 1. Build the image and flash a spare medium
 

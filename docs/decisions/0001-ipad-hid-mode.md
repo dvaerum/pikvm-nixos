@@ -211,6 +211,29 @@ survives reboot and this fix is insufficient. Also inspect
 the content is inert once unlinked. Recovery if ever stranded: a `kvmd-otg`
 restart / reboot (re-assemble from the now-stock config), or re-deploy #51.
 
+**HW positive control (it-03400, real Pi4B):** a single-variable A/B on the same
+box — set ipad → roll back to a pre-#51 generation → **reboot** → read the
+assembled descriptor. On the *interim tmpfiles* design the trap **survives the
+reboot**: the pre-#51 generation actively **re-derives iPad** from the leftover
+`/etc`→`/var` override every boot (usb1 `55c045b2`, rlen 4, 2 functions, no
+mouse-alt), with no operator recovery. On the *`environment.etc`* fix the same
+sequence yields **stock desktop** by the next boot (usb1 `3a71a5a2`, rlen 7, 3
+functions, mouse-alt back) — the symlink is already gone immediately
+post-rollback (the live window above) and the reboot produces stock. Regression
+re-checked on the fixed build: a plain `set ipad → reboot` (no rollback) still
+lands ipad, so making the symlink generation-managed did **not** cost
+mode-survives-a-reboot. The trap is closed without losing persistence.
+
+**Residue (intentional, documented so it isn't discovered by surprise):** only
+the `/etc` symlink is generation-managed; the `/var/lib/kvmd/hidmode.yaml` marker
+**persists** across the rollback. So rolling **forward** again (re-deploying a
+#51 generation) restores the control surface **and re-applies the persisted
+mode** — the box returns to its pre-rollback mode (e.g. ipad), **not** stock.
+That is deliberate (the mode is preserved across the excursion, matching the
+across-upgrade persistence property); it only means "rollback reverts to stock"
+describes the *rolled-back* generation, and a subsequent roll-forward is a
+mode-restoring, not a mode-clearing, event.
+
 ### Option surface
 
 - `services.pikvm.kvmd.hidMode.enable` — the runtime switch apparatus. Default

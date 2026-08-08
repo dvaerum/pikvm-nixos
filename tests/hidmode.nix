@@ -59,6 +59,16 @@
     assert machine.succeed("pikvm-hidmode get").strip() == "desktop"
     machine.succeed("test ! -e /var/lib/kvmd/hidmode")
 
+    # (1b) #53 fast-follow: a box UPGRADED from the pre-#53 scheme carries the
+    # retired marker as inert residue. The tmpfiles `r` rule clears it on
+    # activation. Simulate: plant a marker, run the tmpfiles remove pass (the
+    # activation path), confirm it's gone — and the yaml/mode are untouched (the
+    # marker is inert, so removing it changes nothing).
+    machine.succeed("install -m0644 -o kvmd -g kvmd /dev/null /var/lib/kvmd/hidmode")
+    machine.succeed("systemd-tmpfiles --remove")
+    machine.succeed("test ! -e /var/lib/kvmd/hidmode")
+    assert machine.succeed("pikvm-hidmode get").strip() == "desktop"
+
     # The mode is wired in as the LAST-read override.d drop-in: a symlink at 90-
     # (sorts after 00/10) pointing into the mutable /var file.
     machine.succeed("test -L /etc/kvmd/override.d/90-hidmode.yaml")

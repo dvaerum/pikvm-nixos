@@ -162,6 +162,13 @@ in
     # source of the mode (#53); pikvm-hidmode rewrites it atomically.
     systemd.tmpfiles.rules = [
       "C /var/lib/kvmd/hidmode.yaml 0644 kvmd kvmd - ${defaultYaml}"
+      # #53 fast-follow: remove the retired plain-text marker on activation. #53
+      # collapsed the mode to the boot-authoritative yaml above and nothing reads
+      # the marker anymore, but a box UPGRADED from the pre-#53 scheme still carries
+      # /var/lib/kvmd/hidmode as an inert leftover. Declaratively clear it so a
+      # future maintainer doesn't find a dead file that looks like it should matter.
+      # `r` = remove-if-present (a no-op on a fresh install; idempotent).
+      "r /var/lib/kvmd/hidmode - - - -"
     ];
 
     # The LAST-read override.d drop-in (90- sorts after 00/10, so the mode wins)

@@ -42,9 +42,12 @@
     # `hidModeUrl`+`target` both-set an EVAL error (nullOr target + conditional
     # --target + a mutual-exclusion assertion), so the previous crash-loop trap is
     # now caught by the host eval-gate, not just at runtime. Bump deliberately.
-    # (00cbfc0 = 64ce381 + a CI-only guard commit; identical package artifact.)
+    # (a4bb815 = 00cbfc0 + #49: retunes the MCP drift wording to "next-boot
+    # pending / will boot into X" — the matched pair to appliance #53, which sources
+    # `requested` from the boot-authoritative yaml; a src change so the MCP package
+    # moves. Landed AFTER #53 so the wording never gets ahead of the semantics.)
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server/00cbfc0207c1be2b28b25679019e7fe9bd9d9654";
+      url = "github:dvaerum/pikvm_mcp_server/a4bb815a7b88ae0f1b6dadada772a53b457efc41";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -21,18 +21,28 @@
 # path the appliance already runs on a timer.
 #
 #   usage: otg-persistence-check.sh --mode <name> --horizontal-wheel <true|false>
-#                                   [--host root@10.10.132.110] [--no-deploy]
+#                                   [--host root@10.10.132.110]
+#                                   [--deploy-ref <flake-ref>] [--no-deploy]
 #
 # --no-deploy runs the before/after comparison WITHOUT redeploying, which is
 # how you sanity-check the harness itself: it must report "unchanged" when
 # nothing happened. A persistence check that cannot first be seen agreeing
 # with a no-op is not measuring what it claims.
+#
+# --deploy-ref names the flake to deploy (WITHOUT the #rpi4 attr; it is
+# appended). Strongly preferred over the default: without it the script uses
+# nixos-upgrade.service, which tracks the flake's DEFAULT BRANCH rather than
+# whatever the box is running. On a box sitting on a branch that does not
+# redeploy — it REVERTS, possibly to a tree that lacks the feature under test.
+# Passing the ref also lets the script pre-compute the generation the deploy
+# SHOULD produce, and then verify it did.
 set -euo pipefail
 
 HOST="root@10.10.132.110"
 MODE=""
 HW=""
 DEPLOY=1
+DEPLOY_REF=""
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [ $# -gt 0 ]; do
@@ -40,6 +50,7 @@ while [ $# -gt 0 ]; do
 	--mode) MODE="$2"; shift 2 ;;
 	--horizontal-wheel) HW="$2"; shift 2 ;;
 	--host) HOST="$2"; shift 2 ;;
+	--deploy-ref) DEPLOY_REF="$2"; shift 2 ;;
 	--no-deploy) DEPLOY=0; shift ;;
 	*) echo "unknown argument: $1" >&2; exit 64 ;;
 	esac
@@ -89,21 +100,55 @@ if ! assert_mode "$WORK/before.json"; then
 	exit 1
 fi
 
+# Which generation SHOULD this deploy produce? Computed from the ref BEFORE
+# deploying, so the outcome can be verified rather than the command trusted.
+EXPECTED_GEN=""
+if [ "$DEPLOY" -eq 1 ] && [ -n "$DEPLOY_REF" ]; then
+	echo
+	echo "=== EXPECTED GENERATION (pre-computed from $DEPLOY_REF) ==="
+	EXPECTED_GEN="$(nix eval --refresh --raw \
+		"${DEPLOY_REF}#nixosConfigurations.rpi4.config.system.build.toplevel")"
+	echo "$EXPECTED_GEN"
+fi
+
+# When was the gadget last assembled? If a deploy doesn't restart kvmd-otg the
+# gadget is simply whatever it already was, and comparing it to itself proves
+# nothing. This timestamp turns that from an invisible false pass into a
+# stated one.
+otg_started_before="$(sh_remote 'systemctl show kvmd-otg -p ActiveEnterTimestamp --value')"
+
 if [ "$DEPLOY" -eq 1 ]; then
 	echo
 	echo "=== REDEPLOY ==="
-	sh_remote 'systemctl restart --no-block nixos-upgrade.service'
-	# Poll to completion rather than sleeping a guessed interval.
-	for _ in $(seq 1 120); do
-		state="$(sh_remote 'systemctl show nixos-upgrade -p ActiveState --value' || echo unknown)"
-		[ "$state" = "activating" ] || [ "$state" = "reloading" ] || break
-		sleep 5
-	done
-	result="$(sh_remote 'systemctl show nixos-upgrade -p Result --value')"
-	echo "nixos-upgrade Result=$result"
-	if [ "$result" != "success" ]; then
-		echo "ABORT: the deploy itself failed; persistence is untestable." >&2
-		exit 1
+	if [ -n "$DEPLOY_REF" ]; then
+		# Keep the output. Discarding it makes a failed deploy undiagnosable —
+		# "nixos-rebuild failed" with no reason is a dead end, which this script
+		# demonstrated before the log was retained.
+		CACHIX_KEY="nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
+		if ! sh_remote "nixos-rebuild switch --refresh --flake '${DEPLOY_REF}#rpi4' --option extra-substituters https://nixos-raspberrypi.cachix.org --option extra-trusted-public-keys '${CACHIX_KEY}'" \
+			>"$WORK/deploy.log" 2>&1; then
+			echo "ABORT: nixos-rebuild failed; persistence is untestable." >&2
+			echo "--- last 20 lines of the deploy ---" >&2
+			tail -20 "$WORK/deploy.log" >&2
+			exit 1
+		fi
+		tail -1 "$WORK/deploy.log"
+	else
+		echo "NOTE using nixos-upgrade.service, which tracks the DEFAULT BRANCH."
+		echo "     If the box is on a branch this REVERTS it. Prefer --deploy-ref."
+		sh_remote 'systemctl restart --no-block nixos-upgrade.service'
+		# Poll to completion rather than sleeping a guessed interval.
+		for _ in $(seq 1 120); do
+			state="$(sh_remote 'systemctl show nixos-upgrade -p ActiveState --value' || echo unknown)"
+			[ "$state" = "activating" ] || [ "$state" = "reloading" ] || break
+			sleep 5
+		done
+		result="$(sh_remote 'systemctl show nixos-upgrade -p Result --value')"
+		echo "nixos-upgrade Result=$result"
+		if [ "$result" != "success" ]; then
+			echo "ABORT: the deploy itself failed; persistence is untestable." >&2
+			exit 1
+		fi
 	fi
 fi
 
@@ -111,6 +156,60 @@ echo
 echo "=== AFTER ==="
 gen_after="$(sh_remote 'readlink -f /run/current-system')"
 echo "generation: $gen_after"
+
+# Did the deploy land the tree we asked for? A deploy that "succeeds" while
+# producing a different generation than the ref evaluates to is the
+# artifact-identity failure: exit 0, box running something else.
+if [ -n "$EXPECTED_GEN" ]; then
+	if [ "$gen_after" != "$EXPECTED_GEN" ]; then
+		echo
+		echo "FAIL: the deploy did NOT produce the tree $DEPLOY_REF evaluates to." >&2
+		echo "  expected: $EXPECTED_GEN" >&2
+		echo "  actual  : $gen_after" >&2
+		echo "Whatever this run measured, it was not persistence across the" >&2
+		echo "intended deploy. Do not read the mode comparison below as evidence." >&2
+		exit 1
+	fi
+	echo "generation MATCHES the pre-computed expectation for $DEPLOY_REF"
+fi
+
+# THE MARKER IS WHAT A REDEPLOY ACTUALLY THREATENS — not the gadget.
+# A redeploy deliberately does NOT restart kvmd-otg (the mutable mode files are
+# kept out of restartTriggers), so the assembled gadget survives untouched and a
+# gadget-only comparison is close to a tautology. What a redeploy COULD destroy
+# is the mode marker — a tmpfiles rule reseeding it, an activation script
+# rewriting it. That damage is INVISIBLE in the gadget: the mode keeps looking
+# correct until the next boot, then silently flips. So check the marker itself.
+marker_after="$(sh_remote 'cat /var/lib/kvmd/hidmode 2>/dev/null || echo "<absent>"')"
+echo "mode marker after deploy: $marker_after"
+if [ "$marker_after" != "$MODE" ]; then
+	echo
+	echo "FAIL: the deploy CLOBBERED the mode marker." >&2
+	echo "  expected: $MODE" >&2
+	echo "  actual  : $marker_after" >&2
+	echo "The running gadget may still look correct — a redeploy does not" >&2
+	echo "re-assemble it — so this would stay invisible until the next reboot," >&2
+	echo "which is precisely when a user would hit it." >&2
+	exit 1
+fi
+echo "marker SURVIVED the deploy (still '$MODE')"
+
+otg_started_after="$(sh_remote 'systemctl show kvmd-otg -p ActiveEnterTimestamp --value')"
+if [ "$otg_started_before" = "$otg_started_after" ]; then
+	echo
+	echo "NOTE kvmd-otg did NOT restart across this deploy"
+	echo "     (ActiveEnterTimestamp unchanged: $otg_started_after)"
+	echo "     This is the EXPECTED design — the mode files are deliberately kept"
+	echo "     out of restartTriggers so an update cannot disturb a live gadget."
+	echo "     What that means for this run: the gadget comparison below is close"
+	echo "     to a tautology, and the load-bearing evidence is the MARKER check"
+	echo "     above. Proof that the mode is correctly RE-DERIVED on a fresh"
+	echo "     assembly comes from the REBOOT leg, not from this one."
+else
+	echo "kvmd-otg DID restart ($otg_started_before -> $otg_started_after), so the"
+	echo "gadget was genuinely re-assembled and the comparison below has content."
+fi
+
 if [ "$gen_before" = "$gen_after" ]; then
 	# Not an error: a no-op deploy is the normal result when main has not
 	# moved. But say so plainly — a generation that never changed makes this

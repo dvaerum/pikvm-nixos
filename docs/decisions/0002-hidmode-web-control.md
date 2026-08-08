@@ -67,14 +67,30 @@ Four properties, each load-bearing:
 `modules/hidmode-control.html`, served behind the same dashboard auth
 (`error_page 401/403 = @login`, like `location /`). Dependency-free JS that:
 
-- `GET /hidmode` on load → shows current mode (the appliance marker).
+- `GET /hidmode` on load → shows current mode. The endpoint (post-#41) reports the
+  **assembled** gadget: `{mode(=observed), requested, observed, settled}`, not just
+  the marker.
 - On the toggle: a **confirm dialog** warning the switch re-plugs the target's
   USB and drops the session (~5 s, the same as a kvmd restart);
 - then `POST /hidmode {"mode": …}` — **non-blocking** — with honest in-flight
   state ("switching, wait…"), no locking;
-- then **polls `GET /hidmode` until the marker reflects the new mode** — it never
-  optimistically claims success before the appliance confirms. The `/var` marker
+- then **polls `GET /hidmode` until `observed` reflects the new mode** — it never
+  optimistically claims success before the appliance confirms. The assembled gadget
   is the single source of truth; the UI follows it.
+- **Drift surfacing — the next-boot hazard, not "the switch failed":** `mode ==
+  observed`, so the page is already correct about the present and offers the button
+  that reconciles a half-failed switch — a user just clicks again. The subtler
+  hazard is that the **marker (`requested`) drives the next boot**: when `requested
+  != observed` the box runs one mode now but is primed to boot the other, and
+  someone who reads the current mode and later reboots for an unrelated reason gets
+  a silently different target. So on `settled && requested != observed` the page
+  warns **which mode the box will boot into** ("saved mode is X … will boot into X
+  on the next reboot"), not a raw-field dump; and it notes the re-assembling state
+  (`settled == false`). This mirrors the MCP-side `pikvm_hidmode_status.driftDetected`
+  (both target the same durable-intent-vs-live-gadget disagreement). The 443 proxy
+  passes the body verbatim so these fields reach the browser (HW-confirmed,
+  it-03400); a VM check asserts both the fields-through-proxy and the page logic.
+  (Spec sharpened by the manager + it-03400 from real-silicon drift testing.)
 
 ## The functional/faithful split — control "a" is NOT the end state
 

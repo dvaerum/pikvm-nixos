@@ -6,6 +6,11 @@
      token server-side — this page never sees the token or the loopback :8083.
      The appliance /var marker is the single source of truth: we POST, then POLL
      GET until it reflects the new mode. Never optimistic.
+     The assembled-mode endpoint reports {mode(=observed), requested, observed,
+     settled}. `mode`==observed so the page is already correct about NOW; the extra
+     hazard we surface is that the marker (requested) drives the NEXT BOOT, so when
+     requested != observed the box will silently boot into a different mode — we
+     warn WHICH mode that is (plus the unsettled/re-assembling state).
      The integrated stock-dashboard menu control is the REQUIRED faithfulness
      follow-up (see docs/decisions/0002-hidmode-web-control.md). -->
 <html lang="en">
@@ -25,6 +30,9 @@
   button[disabled] { cursor: progress; opacity: 0.6; }
   .status { margin-top: 1rem; min-height: 1.5rem; }
   .err { color: #c0392b; }
+  .drift { margin-top: 0.5rem; min-height: 0; }
+  .drift.warn { color: #c0392b; font-weight: 600; }
+  .drift.settling { opacity: 0.75; }
   .muted { opacity: 0.7; font-size: 0.9rem; }
   code { padding: 0 0.25rem; }
 </style>
@@ -34,6 +42,7 @@
 <div class="card">
   <p>Current mode: <span id="mode" class="mode">…</span></p>
   <p class="muted" id="desc"></p>
+  <div class="drift" id="drift" role="status" aria-live="polite"></div>
   <button id="toggle" disabled>…</button>
   <div class="status" id="status" role="status" aria-live="polite"></div>
 </div>
@@ -48,7 +57,7 @@
 "use strict";
 const MODES = { desktop: "ipad", ipad: "desktop" };
 const el = (id) => document.getElementById(id);
-let current = null, busy = false;
+let current = null, last = {}, busy = false;
 
 function setStatus(msg, isErr) {
   const s = el("status");
@@ -73,6 +82,32 @@ async function api(method, body) {
   return data;
 }
 
+function renderDrift() {
+  // The assembled-mode endpoint reports `observed` (the real gadget assembled NOW),
+  // `requested` (the persisted /var marker = durable intent) and `settled`. `mode`
+  // == observed, so the page above is already correct about the present and offers
+  // the button that reconciles it. The hazard this warns about is different: the
+  // MARKER drives the NEXT BOOT. When requested != observed the box is running one
+  // mode now but is primed to boot into the *other* — someone reads the current
+  // mode, reboots for an unrelated reason, and the target's mouse silently changes.
+  // So name the next-boot mode, don't dump raw fields. Defensive: an older endpoint
+  // omits these — then there's nothing to show.
+  const d = el("drift");
+  const settled = last.settled, req = last.requested, obs = last.observed;
+  if (settled === false || (obs === null && req !== undefined)) {
+    d.textContent = "The gadget is re-assembling — mode not settled yet.";
+    d.className = "drift settling";
+  } else if (req && obs && req !== obs) {
+    d.textContent = "⚠ Saved mode is “" + req + "”: this box is running “" + obs
+      + "” now but will boot into “" + req + "” on the next reboot. "
+      + "Use “Switch to " + req + "” to apply it now.";
+    d.className = "drift warn";
+  } else {
+    d.textContent = "";
+    d.className = "drift";
+  }
+}
+
 function render() {
   el("mode").textContent = current || "unknown";
   const other = MODES[current];
@@ -86,11 +121,13 @@ function render() {
   } else {
     btn.disabled = true;
   }
+  renderDrift();
 }
 
 async function refresh() {
   try {
     const d = await api("GET");
+    last = d;
     current = d.mode;
     render();
     return d.mode;
@@ -133,8 +170,9 @@ async function onToggle() {
   const ok = await pollUntil(target, Date.now() + 45000);
   busy = false;
   if (ok) setStatus("Now in " + target + " mode.");
-  else setStatus("Switch requested, but the appliance hasn't reported " + target +
-                 " yet. Reload to re-check.", true);
+  else setStatus("Switch requested, but the appliance is still assembled as “" +
+                 (last.observed || current || "unknown") + "” (see above). " +
+                 "It may still be re-assembling — reload to re-check, or try again.", true);
   render();
 }
 

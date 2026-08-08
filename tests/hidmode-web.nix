@@ -91,6 +91,18 @@
         f"authed GET /hidmode must reach the endpoint (server-side bearer); got {out!r}"
     assert data["mode"] == "desktop", f"fresh install should seed desktop; got {data['mode']}"
 
+    # --- (2b) the DRIFT signal reaches through the 443 proxy ---------------
+    # The assembled-mode endpoint reports requested/observed/settled; the proxy
+    # passes the body verbatim (no sub_filter), so a dashboard consumer can detect
+    # a failed switch (settled & requested != observed). Assert the fields survive
+    # the proxy — this is what the control page's drift indicator consumes, and
+    # what the pre-assembled-endpoint base could NOT surface. Non-vacuous: an
+    # endpoint/proxy that dropped these would leave drift invisible to the UI.
+    for k in ("requested", "observed", "settled"):
+        assert k in data, f"443 /hidmode must expose '{k}' for drift detection; got {out!r}"
+    assert data["observed"] == data["mode"], \
+        f"'mode' must equal 'observed' (the assembled gadget); got {out!r}"
+
     # --- (3) the client cannot smuggle / override the bearer --------------
     # Cookie-authed (so the dashboard auth_request is satisfied via the cookie,
     # NOT the Authorization header), the client then sends a bogus
@@ -114,6 +126,13 @@
     page = machine.succeed(f"curl -sk {A} https://localhost/hidmode-control")
     assert "HID mode" in page and "/hidmode" in page, \
         "the authed /hidmode-control page must be served"
+    # The shipped page must carry the drift-surfacing logic (reads requested/observed/
+    # settled and explains a failed switch), not just poll `mode`. Assert the markup
+    # + logic are present so a regression that strips them fails here.
+    assert 'id="drift"' in page and "renderDrift" in page, \
+        "the control page must include the drift indicator (id=drift + renderDrift)"
+    assert "will boot into" in page, \
+        "the control page must warn which mode the box will boot into on requested != observed"
 
     # --- (6) the switch drives end-to-end through the proxy ---------------
     # POST is non-blocking; the marker flips after the gadget re-assembles + kvmd

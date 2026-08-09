@@ -190,6 +190,19 @@ deliberately deferred so v1 is a pure, safe observer.
   empty ≥90s → `latched`→udc-rebind) + rebind-clears + the negative control, on
   its real appliance.
 
+### Gating notes (operational — for whoever re-gates the FIRES path)
+
+- **A FIRES run needs ~160s of sustained unbind, not ~120s.** With the 60s
+  baseline the monitor can spend 30–60s *detecting* before the ≥90s sustain
+  clock even starts, so a hold that looks "past threshold" at 120s can still
+  read healthy. Hold the unbind for ~160s minimum before concluding no-fire.
+  (it-03400 twice mis-called its own too-short window — 70s, then 85.8s — as a
+  non-fire; a 90.8s-sustained hold fired `latchDurationMs: 90820`.)
+- **Verify the 0644 status-file mode by a direct `stat`/`ls -l` (`-rw-r--r--`),
+  not by an endpoint 200.** A 200 is *consistent with* a readable file but a
+  same-user read would also 200 — it does not prove the world-readable bit that
+  lets the different-user endpoint traverse in. Assert the mode, not a proxy.
+
 ### Env surface (nix service → bin)
 
 `PIKVM_LATCH_SOURCE=local`, `PIKVM_LATCH_UDC` (optional; default = the single UDC

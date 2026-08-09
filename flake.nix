@@ -47,7 +47,7 @@
     # `requested` from the boot-authoritative yaml; a src change so the MCP package
     # moves. Landed AFTER #53 so the wording never gets ahead of the semantics.)
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server/a4bb815a7b88ae0f1b6dadada772a53b457efc41";
+      url = "github:dvaerum/pikvm_mcp_server/575c06594237988a2e5d2b66a0541d1348c0e672";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -117,6 +117,9 @@
           );
           hid-recovery = pkgs.testers.runNixOSTest (
             import ./tests/hid-recovery.nix { inherit self pkgs; }
+          );
+          hid-latch-monitor = pkgs.testers.runNixOSTest (
+            import ./tests/hid-latch-monitor.nix { inherit self pkgs; }
           );
           mcp-hid-recovery-env = pkgs.testers.runNixOSTest (
             import ./tests/mcp-hid-recovery-env.nix { inherit self pkgs; }

@@ -32,6 +32,10 @@ let
     PORT = int(os.environ["PORT"])
     ACTIONS = {"soft_connect", "udc-rebind", "reboot"}
     UDC_ROOT = "/sys/class/udc"
+    # The HID-latch monitor (services.pikvm.hidLatchMonitor) writes its latest
+    # classification here each sample; we serve it read-only at
+    # GET /hid-recovery/latch-status (see docs/decisions/0003-hid-latch-monitor.md).
+    LATCH_STATUS_PATH = "/run/pikvm-hid-latch/status.json"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
 
@@ -72,12 +76,18 @@ let
             return self.reply(502, False, "%s failed (rc=%d)" % (action, result.returncode))
 
         def do_GET(self):
+            path = self.path.rstrip("/")
+            if path == "/hid-recovery/udc-state":
+                return self._udc_state()
+            if path == "/hid-recovery/latch-status":
+                return self._latch_status()
+            return self.reply(404, False, "not found")
+
+        def _udc_state(self):
             # Read-only GROUND-TRUTH UDC state for the MCP health_check: the kvmd
             # HID online flags can lie, but /sys/class/udc/<udc>/state is
             # authoritative. Pure read of a world-readable (0444) sysfs node — no
             # root, no polkit, no systemctl (never touches the privileged units).
-            if self.path.rstrip("/") != "/hid-recovery/udc-state":
-                return self.reply(404, False, "not found")
             if not self._authorized():
                 return self.reply(401, False, "unauthorized")
             try:
@@ -98,6 +108,26 @@ let
             # health_check (state == "configured"); the raw `state` string rides
             # along for diagnostics ("not attached" vs "addressed" vs …).
             return self._send_json(200, {"udc": udc, "state": state, "online": state == "configured"})
+
+        def _latch_status(self):
+            # Serve the HID-latch monitor's latest classification verbatim (it
+            # writes LATCH_STATUS_PATH atomically each sample). Pure file read — no
+            # root/polkit/systemctl. Absent file = the monitor is disabled or has
+            # not written its first sample yet; that is `available:false`, NOT an
+            # error. `lastSampleAt` in the payload is the monitor's on-box dead-man
+            # (a stale value ⇒ the monitor hung; a missing file ⇒ it is not up).
+            if not self._authorized():
+                return self.reply(401, False, "unauthorized")
+            try:
+                with open(LATCH_STATUS_PATH) as fh:
+                    status = json.loads(fh.read())
+            except FileNotFoundError:
+                return self._send_json(200, {"ok": True, "available": False,
+                                             "message": "hid-latch monitor status not available"})
+            except (OSError, ValueError) as exc:
+                return self.reply(500, False, "cannot read latch status: %s" % type(exc).__name__)
+            status.setdefault("available", True)
+            return self._send_json(200, status)
 
         def log_message(self, *args):
             pass  # don't log tokens/paths

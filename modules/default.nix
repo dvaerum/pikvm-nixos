@@ -12,6 +12,7 @@
     ./nginx.nix
     ./hid-recovery.nix
     ./hid-recovery-endpoint.nix
+    ./hid-latch-monitor.nix
     # ./webterm.nix is imported by ./nginx.nix (the web front-door owns it).
   ];
 

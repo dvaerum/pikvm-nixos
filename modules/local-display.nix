@@ -31,10 +31,21 @@
 # >1080p the dongle downscales IN HARDWARE — no module setting recovers it;
 # sharpness beyond that is a source/dongle matter, out of scope here.
 #
+# ⚠️ KNOWN RISK on `fixed`'s "reserved console on the other micro-HDMI": it is
+# UNVERIFIED and likely INFEASIBLE with mpv. Two independent mechanisms point the
+# same way: (1) VTs are global, not per-connector — fbcon renders the active VT on
+# every output, so mpv switching VTs moves the console off all of them; (2) DRM
+# master is per-DEVICE — both micro-HDMI are connectors on ONE vc4 card, so mpv
+# taking master to drive its connector suspends fbcon device-wide, leaving the
+# other connector frozen/blank rather than a live login. The only clean fix is DRM
+# leasing one connector to the app while fbcon keeps the rest, which mpv does not
+# do. The serial console (console=serial0) stays available regardless. Settling
+# this needs a two-monitor on-HW check (a hardware prerequisite for georg).
+#
 # ⚠️ HELD: opt-in (default off), NOT enabled on any host. The DRM path is proven
 # (georg saw the picture); what's unconfirmed is this MODULE's own wiring (VT +
-# supervisor) and the per-mode console coexistence. Deploy only on georg's
-# explicit greenlight of the finished behavior.
+# supervisor), the per-mode console coexistence (above), and the auto-mode
+# unplug/replug/move recovery. Deploy only on georg's explicit greenlight.
 {
   config,
   lib,

@@ -59,6 +59,7 @@
   libxkbcommon,
   tesseract,
   util-linux, # `mount` for the MSD/PST remount helper (kvmd hardcodes /bin/mount)
+  v4l-utils, # `v4l2-ctl` for kvmd-edidconf + the tc358743 EDID-loader unit (both hardcode /usr/bin/v4l2-ctl)
 }:
 let
   # kvmd's OCR (kvmd/apps/kvmd/ocr.py) both dlopens libtesseract AND, at
@@ -213,6 +214,22 @@ buildPythonApplication rec {
     # at util-linux's mount (root-invoked, so the plain binary is fine).
     substituteInPlace kvmd/helpers/remount/__init__.py \
       --replace-fail '"/bin/mount"' '"${lib.getExe' util-linux "mount"}"'
+
+    # kvmd-edidconf (the CSI/tc358743 EDID CLI) hardcodes two Arch FHS paths:
+    # its --presets default (the shipped v0/v1/v2/v3/v4mini/v4plus.hex presets,
+    # which DO exist — just under our store path, not /usr/share) and every
+    # v4l2-ctl invocation it shells out to for --apply/--clear. Neither exists
+    # on NixOS, so `kvmd-edidconf --import-preset v2 --apply` (needed once per
+    # box to seed /etc/kvmd/tc358743-edid.hex — see modules/kvmd.nix's
+    # kvmd-tc358743 unit, which loads that file at every boot) hard-fails with
+    # FileNotFoundError on both counts. $out is this same derivation's own
+    # output — self-referencing it here is standard (only the STRING needs to
+    # be correct at substitute time; the tree doesn't need to exist yet).
+    substituteInPlace kvmd/apps/edidconf/__init__.py \
+      --replace-fail \
+        '"/usr/share/kvmd/configs.default/kvmd/edid"' \
+        "\"$out/share/kvmd/configs.default/kvmd/edid\"" \
+      --replace-fail '"/usr/bin/v4l2-ctl"' '"${lib.getExe' v4l-utils "v4l2-ctl"}"'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

@@ -60,6 +60,15 @@ let
   mainConfigPath = if isAuto then "/run/kvmd/main.yaml" else "${mainConfigs}/${cfg.platform}.yaml";
   platformIdPath = if isAuto then "/run/kvmd/platform" else "${platformFile}";
 
+  # A fixed CSI (tc358743) platform, known at eval time. `&&` short-circuits
+  # before the `elemAt parts 1` that would otherwise be out-of-bounds on
+  # "auto" (a length-1 split) — same laziness the `platformFile` reference
+  # above already relies on.
+  isCsiFixed = !isAuto && (lib.elemAt parts 1) == "hdmi";
+  # The per-base default EDID preset (kvmd ships v0/v1/v2/v3/v4mini/v4plus.hex
+  # under configs.default/kvmd/edid/) — only forced when isCsiFixed.
+  csiEdidPreset = "${configsDefault}/kvmd/edid/${lib.elemAt parts 0}.hex";
+
   # Boot-time hardware detector: figure out board + capture device and point
   # kvmd at the matching profile. Heuristics; expected to be tuned on real
   # hardware. Falls back to the common Pi 4 CSI profile.
@@ -112,6 +121,18 @@ let
       ln -sf "$configs/$variant.yaml" /run/kvmd/main.yaml
       printf 'PIKVM_MODEL=%s\nPIKVM_VIDEO=%s\nPIKVM_BOARD=%s\n' "$base" "$video" "$board" >/run/kvmd/platform
       echo "kvmd-platform-detect: selected $variant" >&2
+
+      # CSI/tc358743 needs its EDID loaded onto the bridge chip before kvmd's
+      # streamer can ever get a signal (see the kvmd-tc358743 unit, which
+      # loads this file at every boot and gates itself on it existing). The
+      # right preset is per-base (v2/v3/v4mini/v4plus), which only this
+      # runtime detector knows for `platform = "auto"`. Seed once — never
+      # clobber an admin's own `kvmd-edidconf --set-* --apply` customisation
+      # on a later boot.
+      if [ "$video" = hdmi ] && [ ! -e /etc/kvmd/tc358743-edid.hex ]; then
+        install -D -m 0644 "${configsDefault}/kvmd/edid/$base.hex" /etc/kvmd/tc358743-edid.hex
+        echo "kvmd-platform-detect: seeded tc358743-edid.hex from $base preset" >&2
+      fi
     '';
   };
 
@@ -402,6 +423,12 @@ in
       "C+ /etc/kvmd/vncpasswd 0600 kvmd-vnc kvmd-vnc - ${configsDefault}/kvmd/vncpasswd"
       "C+ /etc/kvmd/totp.secret 0600 kvmd kvmd - ${configsDefault}/kvmd/totp.secret"
     ]
+    ++ lib.optional isCsiFixed
+      # For "auto" the runtime detector seeds this instead (only it knows the
+      # base at boot); for a fixed CSI platform the base is already known
+      # here. Same "seed once, never clobber an admin's kvmd-edidconf
+      # customisation" contract as the credential C+ rules above.
+      "C+ /etc/kvmd/tc358743-edid.hex 0644 kvmd kvmd - ${csiEdidPreset}"
     ++ lib.optional (!isAuto)
       # A fixed platform has no boot-time detector writing /run/kvmd/main.yaml,
       # so materialise it here — kvmd's --main-config default now points there
@@ -422,8 +449,27 @@ in
     # stable name whether it's a TC358743 (CSI) or a USB (UVC) grabber. Unlike
     # upstream's port-locked udev helper, we match the device by identity, so
     # the MacroSilicon MS2109 grabber works in any USB port.
+    #
+    # CSI: TWO rules, not one. `ATTR{name}=="tc358743"` is upstream's own match
+    # (stock Arch's older camera stack reports the video4linux node under the
+    # sensor driver's own name) and stays first for anyone it still matches.
+    # But on this vendor kernel's bcm2835-unicam legacy driver, the sensor
+    # (tc358743) is exposed only as a v4l-subdev — the actual /dev/videoN
+    # capture NODE is unicam's own, always named "unicam-image" regardless of
+    # which downstream sensor is attached. A CSI Pi 4 appliance running that
+    # driver therefore never matches the first rule at all → no /dev/kvmd-video
+    # → ustreamer has nothing to open → every stream is ustreamer's own
+    # "NO LIVE VIDEO" placeholder JPEG, HTTP 200 and all (see the second trap
+    # below — a 200 here is NOT evidence capture is working). Found in
+    # production on pikvm01 (georgs-mac-mini's iPad node) 2026-08-23: real
+    # /sys/class/video4linux/video0/name was "unicam-image", parented at
+    # `fe801000.csi` — the SoC's fixed CSI1 controller address (PiKVM's V2/V3/V4
+    # CSI HATs wire the sensor there consistently, so this is a stable match,
+    # not a board-instance quirk). KERNELS scopes it to that controller so a
+    # second, unrelated CSI camera some day wouldn't also match "unicam-image".
     services.udev.extraRules = ''
       SUBSYSTEM=="video4linux", ATTR{name}=="tc358743", SYMLINK+="kvmd-video"
+      SUBSYSTEM=="video4linux", ATTR{name}=="unicam-image", KERNELS=="fe801000.csi", SYMLINK+="kvmd-video"
       SUBSYSTEM=="video4linux", ATTRS{idVendor}=="534d", ATTRS{idProduct}=="2109", ATTR{index}=="0", SYMLINK+="kvmd-video"
       SUBSYSTEM=="video4linux", ENV{ID_V4L_CAPABILITIES}==":capture:", ENV{ID_USB_INTERFACES}=="*:0e02*", ATTR{index}=="0", SYMLINK+="kvmd-video"
 
@@ -448,6 +494,48 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = lib.getExe detect;
+      };
+    };
+
+    # --- CSI (tc358743) EDID loader ----------------------------------------
+    # Stock PiKVM's per-platform Arch package `systemctl enable`s this for
+    # every CSI board — a step our packaging never replicated (untested until
+    # a real CSI appliance, pikvm01, went into production 2026-08-23; our HW
+    # gate rig is hdmiusb, which never exercises this path at all). Without
+    # it the tc358743 never gets an EDID, the HDMI source sees no valid sink
+    # and never locks, and kvmd's own DV-timings polling (streamer.cmd's
+    # `--dv-timings`) has nothing to lock onto — ustreamer serves its "NO LIVE
+    # VIDEO" placeholder JPEG forever, HTTP 200 and all. Defined whenever CSI
+    # is POSSIBLE (fixed-CSI, or auto — which cannot rule it out at eval
+    # time); ConditionPathExists is the runtime gate for auto, since the
+    # detector (above) only seeds tc358743-edid.hex when it finds "hdmi" —
+    # absent, this unit is a systemd-native no-op (Result=success), never a
+    # failure, on a hdmiusb/USB-dongle box.
+    systemd.services.kvmd-tc358743 = lib.mkIf (isCsiFixed || isAuto) {
+      description = "PiKVM - EDID loader for TC358743";
+      before = [ "kvmd.service" ];
+      after = [ "dev-kvmd\\x2dvideo.device" "systemd-modules-load.service" ]
+      ++ lib.optional isAuto "kvmd-platform-detect.service";
+      requires = lib.optional isAuto "kvmd-platform-detect.service";
+      wants = [ "dev-kvmd\\x2dvideo.device" ];
+      wantedBy = [ "multi-user.target" ];
+      unitConfig.ConditionPathExists = "/etc/kvmd/tc358743-edid.hex";
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "kvmd";
+        Group = "kvmd";
+        ExecStart =
+          "${lib.getExe' pkgs.v4l-utils "v4l2-ctl"} --device=/dev/kvmd-video --set-edid=file=/etc/kvmd/tc358743-edid.hex --info-edid";
+        # Mirrors stock's own unit (kvmd-tc358743.service upstream). Clearing
+        # the EDID on stop is intentional — NOT a bug if you see video sever
+        # for the ~8s a restart/stop-then-start takes to reload it: any future
+        # deploy that restarts this unit (a switch that changes this module,
+        # a manual restart) transiently drops the HDMI source's sink until
+        # ExecStart re-fires. HW-confirmed on pikvm01, 2026-08-23 — a genuine
+        # DV-timings lock (1920x1080@148.5MHz), not just a symlink check.
+        ExecStop =
+          "${lib.getExe' pkgs.v4l-utils "v4l2-ctl"} --device=/dev/kvmd-video --clear-edid";
       };
     };
 

@@ -12,9 +12,12 @@ let
   ustreamer-python = pythonPackages.callPackage ./python/ustreamer { inherit ustreamer; };
   # A separate named variant rather than flipping the default: withJanus
   # pulls in a large stack (janus-gateway, glib, alsa, ...) that most builds
-  # of this flake never need. modules/janus.nix opts services.pikvm.kvmd
-  # .ustreamer into THIS specific package when services.pikvm.janus.enable;
-  # everyone else keeps the lean default.
+  # of this flake never need. modules/janus.nix uses THIS package ONLY as the
+  # source of the janus/ plugin .so the Janus DAEMON loads
+  # (--plugins-folder=${ustreamer-janus}/lib/ustreamer/janus) — it deliberately
+  # does NOT repoint services.pikvm.kvmd.ustreamer here (see that module's
+  # header: --h264-sink is a core ustreamer flag independent of WITH_JANUS, so
+  # kvmd's own capture subprocess stays on the lean default build either way).
   ustreamer-janus = ustreamer.override { withJanus = true; };
 in
 {

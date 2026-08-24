@@ -166,6 +166,26 @@
             pkgs.runCommand "pikvm-host-eval" {
               drvs = lib.concatStringsSep "\n" hostDrvs;
             } "printf '%s\\n' \"$drvs\" > $out";
+
+          # Standalone-consumption gate for the public `nixosModules.appliance`
+          # output, mirroring exactly how template/flake.nix consumes it (bare
+          # `nixpkgs.lib.nixosSystem` + a hostName override, no repo-internal
+          # wiring). hosts/default.nix's `universal` nixosConfiguration happens
+          # to compose identically today, so host-eval above already exercises
+          # this content — but that's incidental, not guaranteed: if `universal`
+          # ever stops being "exactly nixosModules.appliance", this check still
+          # catches a break in the actual downstream entry point. Eval-only.
+          appliance-standalone =
+            (nixpkgs.lib.nixosSystem {
+              # Fixed aarch64-linux, matching hosts/default.nix's `universal`
+              # (and every real PiKVM target) regardless of the evaluating
+              # host's own architecture — eval-only, so no cross-build needed.
+              system = "aarch64-linux";
+              modules = [
+                self.nixosModules.appliance
+                { networking.hostName = "mykvm"; }
+              ];
+            }).config.system.build.toplevel;
         }
       );
 

@@ -11,3 +11,7 @@ result-*
 # Secrets / generated
 *.pem
 *.key
+
+# Claude Code / playwright-mcp (generated + gcroots, never commit)
+.claude/.playwright/
+.playwright-mcp/

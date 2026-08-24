@@ -36,6 +36,13 @@ let
     chmod +x "$out/bin/otg-assert-mode"
     cp ${./lib/otg-mode-specs.json} "$out/share/otg-mode-specs.json"
   '';
+  resolveHw = pkgs.runCommandLocal "otg-resolve-hw" { } ''
+    mkdir -p "$out/bin"
+    cp ${./lib/otg_resolve_horizontal_wheel.py} "$out/bin/otg-resolve-hw.py"
+    chmod +x "$out/bin/otg-resolve-hw.py"
+    cp ${./lib/otg-run-under-kvmd-interpreter.sh} "$out/bin/otg-run-under-kvmd-interpreter"
+    chmod +x "$out/bin/otg-run-under-kvmd-interpreter"
+  '';
 in
 {
   name = "pikvm-otg-mode-assembly";
@@ -65,6 +72,7 @@ in
       environment.systemPackages = [
         snapshot
         assertMode
+        resolveHw
         pkgs.python3
       ];
 
@@ -127,6 +135,26 @@ in
                 "placeholder mode must be NOT-VERIFIED, not a pass")
     assert_mode("no-such-mode", "true", 2, "unknown mode must be NOT-VERIFIED, not a pass")
 
+    # --- horizontal_wheel auto-detect: the CI-VM validation this gate was --
+    # deliberately deferred on (see the horizontal_wheel-auto-detect TODO).
+    # Runs the EXACT code path production uses on the real appliance —
+    # otg-run-under-kvmd-interpreter finding kvmd-otg.service's own
+    # ExecStart and interpreter, then otg-resolve-hw.py reading the config
+    # chain and falling back to the installed schema default — not a VM
+    # shortcut. This VM's config never sets horizontal_wheel, so the only
+    # way to a correct answer is the installed-default leg; a resolver that
+    # silently defaulted to something else would pass every other assertion
+    # in this file and still be wrong.
+    resolved = machine.succeed(
+        "otg-run-under-kvmd-interpreter ${resolveHw}/bin/otg-resolve-hw.py"
+    ).strip()
+    assert resolved == "true", (
+        f"auto-detect resolved horizontal_wheel={resolved!r} on a VM with no "
+        f"override anywhere in the chain; expected the installed kvmd's own "
+        f"default, 'true' — a silent wrong answer here would poison every "
+        f"'auto' caller on real hardware too"
+    )
+
     # --- discrimination: the gate must tell the modes APART ---------------
     # A gate that passes the mode it was handed proves little if it would pass
     # any mode. The gadget here is desktop-shaped, so asserting it against the
@@ -144,6 +172,26 @@ in
             "absolute/relative distinction lives in protocol+subclass, which "
             "are interface fields and are INVISIBLE in the descriptor bytes"
         )
+
+    # --- discrimination: the new desktop/hw=false entry, both directions --
+    # 'must NOT abstain on a healthy one': desktop/hw=true, the VM's REAL
+    # shape, must PASS — proving the entry didn't accidentally make the
+    # common case NOT-VERIFIED.
+    assert_mode("desktop", "true", 0, "desktop/hw=true must PASS against the VM's real gadget")
+    # 'must go RED on a wrong gadget': the VM assembled hw=true (report_length
+    # 7/5). Asserting it against hw=false must FAIL on exactly the wheel-
+    # driven fields — report_length, which changes with the wheel bit, not
+    # protocol/subclass, which don't. This is the false-red this entry could
+    # not ship without the auto-detect resolver above: a caller who mistypes
+    # --horizontal-wheel now gets exactly this RED against a correct gadget,
+    # which is why 'auto' exists.
+    out = assert_mode(
+        "desktop", "false", 1,
+        "desktop-shaped hw=true gadget must FAIL the desktop/hw=false expectations",
+    )
+    assert "hid.usb1.report_length" in out, (
+        "the RED must name the wheel-driven report_length mismatch, not just 'something differs'"
+    )
 
     # --- GATE 2: persistence across reboot --------------------------------
     # georg's requirement: a runtime-selected mode MUST survive. A gadget is

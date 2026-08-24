@@ -31,11 +31,20 @@
   # it does not fight a deliberate runtime switch on an already-running box.
   services.pikvm.kvmd.hidMode.default = "ipad";
 
-  # Self-update from THIS host's config, not `#rpi4`. hosts/rpi4.nix sets the ref
-  # to `#rpi4` with mkDefault; a plain assignment here wins, so pikvm01 tracks the
-  # ipad-default configuration on its weekly auto-upgrade. (The module's hostName-
-  # based default is bypassed by this explicit ref, same as rpi4 does.)
-  services.pikvm.autoUpgrade.flake = "github:dvaerum/pikvm-nixos#pikvm01";
+  # Self-update from THIS host's config, not `#rpi4`. hosts/rpi4.nix sets
+  # deployment.updateRef to `#rpi4` with mkDefault; a plain assignment here
+  # wins, so pikvm01 tracks the ipad-default configuration on its weekly
+  # auto-upgrade (deployment.nix feeds this through to autoUpgrade.flake).
+  services.pikvm.deployment.updateRef = "#pikvm01";
+
+  # Deployment-fact metadata (Phase 3 architecture split — see
+  # modules/deployment.nix). Not yet consumed by hidmode.nix/hid-latch-
+  # monitor.nix (Phase 4, in flight); the two explicit overrides above/below
+  # remain what's actually functional until that lands.
+  services.pikvm.deployment.target = {
+    kind = "ipad";
+    alwaysAttached = true;
+  };
 
   # Narrow the HID-latch monitor's healthy-state set to JUST "configured" (the
   # default also accepts "not attached", since most boxes get legitimately

@@ -1,46 +1,18 @@
 # Raspberry Pi Zero 2 W — the bonus target, on the RPi vendor kernel.
 #
-# Same PiKVM stack as the Pi 4, on the Zero 2 W's (bcm2710) vendor kernel. The
-# TC358743 sits on alternate I2C pins here (i2c_pins_28_29), and less GPU
-# memory is reserved to fit the 512 MB board. Install with:
+# Board facts (vendor kernel, disko, TC358743 pins) live in
+# hosts/boards/zero2w.nix; stack-enablement lives in
+# hosts/profiles/appliance-stack.nix. Install with:
 #
 #   nix run .#install-sd -- --board zero2w /dev/diskX
-{
-  lib,
-  nixos-raspberrypi,
-  disko,
-  ...
-}:
+{ lib, ... }:
 {
   imports = [
-    nixos-raspberrypi.nixosModules.raspberry-pi-02.base
-    disko.nixosModules.disko
-    ./disko.nix
-    ./configtxt-pikvm.nix
+    ./boards/zero2w.nix
+    ./profiles/appliance-stack.nix
   ];
 
-  networking.hostName = "pikvm";
-
-  # Board-specific capture config: TC358743 on the Zero's alternate I2C pins.
-  hardware.raspberry-pi.config.all = {
-    options.gpu_mem = {
-      enable = true;
-      value = 96;
-    };
-    dt-overlays.tc358743 = {
-      enable = true;
-      params.i2c_pins_28_29 = {
-        enable = true;
-        value = true;
-      };
-    };
-  };
-
-  services.pikvm.autoUpgrade.flake = lib.mkDefault "github:dvaerum/pikvm-nixos#zero2w";
-
-  services.pikvm.kvmd.enable = true;
-  services.pikvm.kvmd.platform = "auto";
-  services.pikvm.otg.enable = true;
+  services.pikvm.deployment.updateRef = lib.mkDefault "#zero2w";
 
   # The built-in MCP (onnxruntime + the detection stack) is too heavy for a
   # Zero 2 W, so it defaults OFF here — the faithful PiKVM web dashboard

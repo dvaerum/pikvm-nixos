@@ -40,6 +40,19 @@
     ];
   };
 
+  # it-03400 — the real Pi4B hardware-verification appliance. Was informally
+  # "tracking #rpi4" with no host file of its own; now evaluated by CI on
+  # every run instead of validated exclusively against an out-of-repo machine.
+  it-03400 = nixos-raspberrypi.lib.nixosSystem {
+    specialArgs = { inherit self nixos-raspberrypi disko; };
+    modules = [
+      self.nixosModules.pikvm
+      self.nixosModules.mcp-server
+      ./common.nix
+      ./it-03400.nix
+    ];
+  };
+
   # Raspberry Pi Zero 2 W — bonus target, RPi vendor kernel + disko.
   zero2w = nixos-raspberrypi.lib.nixosSystem {
     specialArgs = { inherit self nixos-raspberrypi disko; };

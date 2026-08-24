@@ -20,9 +20,17 @@
 # Read-only apart from the deploy itself, which is the standard self-update
 # path the appliance already runs on a timer.
 #
-#   usage: otg-persistence-check.sh --mode <name> --horizontal-wheel <true|false>
+#   usage: otg-persistence-check.sh --mode <name> [--horizontal-wheel <true|false>]
 #                                   [--host root@10.10.132.110]
 #                                   [--deploy-ref <flake-ref>] [--no-deploy]
+#
+# --horizontal-wheel is OPTIONAL. Omit it (or pass "auto") and this script
+# resolves it itself, on the TARGET, via otg_resolve_horizontal_wheel.py --
+# explicit config-chain value first, else the installed kvmd's own schema
+# default, never a guess (see that script's docstring for why both legs are
+# needed). Passing it explicitly still works and skips the resolve step,
+# which is useful for deliberately asserting against the WRONG value to
+# prove the comparator still goes RED for the right reason.
 #
 # --no-deploy runs the before/after comparison WITHOUT redeploying, which is
 # how you sanity-check the harness itself: it must report "unchanged" when
@@ -55,7 +63,7 @@ while [ $# -gt 0 ]; do
 	*) echo "unknown argument: $1" >&2; exit 64 ;;
 	esac
 done
-[ -n "$MODE" ] && [ -n "$HW" ] || { echo "need --mode and --horizontal-wheel" >&2; exit 64; }
+[ -n "$MODE" ] || { echo "need --mode" >&2; exit 64; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -86,6 +94,34 @@ assert_mode() {
 		--snapshot "$1" --specs "$HERE/otg-mode-specs.json" \
 		--mode "$MODE" --horizontal-wheel "$HW"
 }
+
+# --- resolve --horizontal-wheel when the caller didn't pin it --------------
+# Runs ON the target: the config chain and the installed kvmd default are
+# both properties of THAT box, not of wherever this script happens to run.
+# Both helpers travel as base64 command-line payloads, same as snapshot_to()
+# above and for the same reason -- piping them over stdin would consume the
+# ssh session's stdin and the next sh_remote call would hang forever waiting
+# for input that never arrives.
+resolve_hw_on_target() {
+	local remote_dir resolver_payload runner_payload
+	remote_dir="$(sh_remote 'mktemp -d /tmp/otg-resolve-hw.XXXXXX')"
+	resolver_payload="$(base64 -w0 <"$HERE/otg_resolve_horizontal_wheel.py")"
+	runner_payload="$(base64 -w0 <"$HERE/otg-run-under-kvmd-interpreter.sh")"
+	sh_remote "echo $resolver_payload | base64 -d > $remote_dir/resolve.py"
+	sh_remote "echo $runner_payload | base64 -d > $remote_dir/run.sh && chmod +x $remote_dir/run.sh"
+	if ! HW="$(sh_remote "bash $remote_dir/run.sh $remote_dir/resolve.py")"; then
+		sh_remote "rm -rf $remote_dir" || true
+		echo
+		echo "ABORT: could not resolve --horizontal-wheel on $HOST." >&2
+		echo "Pass it explicitly (--horizontal-wheel true|false) if you know the" >&2
+		echo "right value, or fix what NOT-VERIFIED above named." >&2
+		exit 1
+	fi
+	sh_remote "rm -rf $remote_dir"
+	echo "resolved --horizontal-wheel=$HW on $HOST (pass it explicitly to skip this step)"
+}
+
+[ -n "$HW" ] && [ "$HW" != "auto" ] || resolve_hw_on_target
 
 echo "=== BEFORE ==="
 gen_before="$(sh_remote 'readlink -f /run/current-system')"

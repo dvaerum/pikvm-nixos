@@ -225,7 +225,8 @@
       # ---- Apps: direct-to-SD installer ----------------------------------
       # `nix run .#install-sd -- --board rpi4 /dev/diskX` formats and installs
       # onto the card via disko (cross-buildable from x86_64 thanks to the
-      # pinned disko PR #1190 + host binfmt for aarch64).
+      # pinned disko PR #1190 + host binfmt for aarch64). (also
+      # --board pikvm01 for the iPad-default kiosk, or zero2w)
       apps = forAllSystems (
         system:
         let
@@ -241,13 +242,13 @@
                 case "$1" in
                   --board) board="''${2:?--board needs a value}"; shift 2 ;;
                   -h|--help)
-                    echo "usage: nix run .#install-sd -- [--board rpi4] /dev/DISK"; exit 0 ;;
+                    echo "usage: nix run .#install-sd -- [--board rpi4|pikvm01|zero2w] /dev/DISK"; exit 0 ;;
                   *) device="$1"; shift ;;
                 esac
               done
               if [ -z "$device" ]; then
                 echo "error: no target disk given" >&2
-                echo "usage: nix run .#install-sd -- [--board rpi4] /dev/DISK" >&2
+                echo "usage: nix run .#install-sd -- [--board rpi4|pikvm01|zero2w] /dev/DISK" >&2
                 exit 1
               fi
               echo ">> Installing pikvm-nixos '$board' to $device"

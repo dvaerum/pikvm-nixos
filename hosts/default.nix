@@ -25,6 +25,21 @@
     ];
   };
 
+  # pikvm01 — the production WB-kiosk Pi4B (iPad target). Same as `rpi4` plus a
+  # per-box overlay (hosts/pikvm01.nix): fresh-install HID mode = ipad, and its
+  # own auto-upgrade ref `#pikvm01`. Leaves `rpi4` untouched at the stock desktop
+  # default for every other Pi4 (e.g. it-03400).
+  pikvm01 = nixos-raspberrypi.lib.nixosSystem {
+    specialArgs = { inherit self nixos-raspberrypi disko; };
+    modules = [
+      self.nixosModules.pikvm
+      self.nixosModules.mcp-server
+      ./common.nix
+      ./rpi4.nix
+      ./pikvm01.nix
+    ];
+  };
+
   # Raspberry Pi Zero 2 W — bonus target, RPi vendor kernel + disko.
   zero2w = nixos-raspberrypi.lib.nixosSystem {
     specialArgs = { inherit self nixos-raspberrypi disko; };

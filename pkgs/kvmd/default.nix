@@ -256,7 +256,7 @@ buildPythonApplication rec {
       --replace-fail \
         '_write(join(func_path, "no_out_endpoint"), "1", optional=True)' \
         'if hid.protocol != 1:  # Keyboard declares an OUTPUT report (LEDs); needs the OUT endpoint.
-            _write(join(func_path, "no_out_endpoint"), "1", optional=True)'
+                _write(join(func_path, "no_out_endpoint"), "1", optional=True)'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

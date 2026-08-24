@@ -230,6 +230,33 @@ buildPythonApplication rec {
         '"/usr/share/kvmd/configs.default/kvmd/edid"' \
         "\"$out/share/kvmd/configs.default/kvmd/edid\"" \
       --replace-fail '"/usr/bin/v4l2-ctl"' '"${lib.getExe' v4l-utils "v4l2-ctl"}"'
+
+    # kvmd-otg's __add_hid() writes no_out_endpoint=1 UNCONDITIONALLY for every
+    # HID gadget function (keyboard, mouse, mouse_alt alike). That's correct
+    # for mouse — its report descriptor has no OUTPUT items, so "no OUT
+    # endpoint" is consistent with what it advertises. It's WRONG for the
+    # keyboard function: its own descriptor (kvmd/apps/otg/hid/keyboard.py)
+    # explicitly declares an OUTPUT report (the LED-state feedback — Num/Caps/
+    # Scroll Lock), so the function ends up promising host→device output
+    # capability it's simultaneously configured with no endpoint to carry.
+    # iOS's HID parser is strict enough to reject the whole interface over
+    # this mismatch: writes to /dev/kvmd-hid-keyboard succeed at the syscall
+    # level (the kernel driver accepts them into its buffer regardless), but
+    # nothing ever reaches the host — HTTP 200 all the way up kvmd's own
+    # stack, zero visible keystrokes. Confirmed end-to-end on pikvm01
+    # (georgs-mac-mini's iPad node), 2026-08-23/24: clearing no_out_endpoint
+    # for hid.usb0 ONLY (mouse's hid.usb1 untouched) fixed keyboard
+    # immediately — real text landed, a genuine iOS Spotlight
+    # search-suggestions dropdown rendered from it — with mouse re-confirmed
+    # unaffected in the same frame. protocol==1 is kvmd's own Keyboard
+    # protocol constant (kvmd/apps/otg/hid/keyboard.py) — a source-grounded
+    # discriminator, not a guess: PiKVM's mouse functions use protocol 0
+    # (absolute) or 2 (relative), never 1, so this cannot misfire on mouse.
+    substituteInPlace kvmd/apps/otg/__init__.py \
+      --replace-fail \
+        '_write(join(func_path, "no_out_endpoint"), "1", optional=True)' \
+        'if hid.protocol != 1:  # Keyboard declares an OUTPUT report (LEDs); needs the OUT endpoint.
+            _write(join(func_path, "no_out_endpoint"), "1", optional=True)'
   '';
 
   pythonImportsCheck = [ "kvmd" ];

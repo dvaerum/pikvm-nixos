@@ -4,6 +4,7 @@
 { ... }:
 {
   imports = [
+    ./deployment.nix
     ./system/auto-upgrade.nix
     ./otg.nix
     ./kvmd.nix

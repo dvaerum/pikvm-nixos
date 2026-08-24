@@ -139,6 +139,9 @@
           janus = pkgs.testers.runNixOSTest (
             import ./tests/janus.nix { inherit self pkgs; }
           );
+          local-display = pkgs.testers.runNixOSTest (
+            import ./tests/local-display.nix { inherit self pkgs; }
+          );
 
           # Aggregate-composition gate: (1) force EVALUATION of every shipped
           # host's toplevel — the per-module VM tests above import modules in

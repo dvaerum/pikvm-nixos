@@ -58,6 +58,10 @@
 # it-03400) and a live two-monitor coexistence smoke-test (georg, opportunistic
 # — the DRM-master conclusion above doesn't need it to be trusted, but seeing it
 # firsthand is still worth doing when convenient).
+#
+# See docs/decisions/0004-local-display.md for the VM-testability design (the
+# sysfsDrmRoot/vt options, the mpv-stub pattern, the DeviceAllow structural
+# guard) added 2026-08-24.
 {
   config,
   lib,
@@ -101,6 +105,12 @@ let
   # In BOTH modes it re-renders when its chosen target's connection state changes,
   # so it survives an unplug→replug (fixed) or a cable move (auto). Surgical: it
   # acts only on a real target change, not on every (benign) DRM uevent.
+  #
+  # Nix-computed values are assigned as plain shell variables ABOVE the static,
+  # readFile'd control-flow script (same idiom as hidmode.nix/hidmode-set.sh and
+  # hid-recovery.nix/hid-recover.sh) — keeps the nix ${} interpolation out of the
+  # part a test wants to exercise unmodified, and out of the part a reader has to
+  # reason about as plain bash.
   runner = pkgs.writeShellApplication {
     name = "pikvm-local-display";
     runtimeInputs = [
@@ -113,86 +123,55 @@ let
       "nounset"
       "pipefail"
     ];
-    text = ''
-      mode=${lib.escapeShellArg cfg.mode}
-      fixed_connector=${lib.escapeShellArg cfg.captureConnector}
-
-      # Is a specific connector (e.g. HDMI-A-2) currently connected?
-      connector_connected() {
-        local s
-        for s in /sys/class/drm/card*-"$1"/status; do
-          [ -e "$s" ] || continue
-          [ "$(cat "$s" 2>/dev/null)" = "connected" ] && return 0
-        done
-        return 1
-      }
-
-      # Echo the first `connected` HDMI-A connector name (e.g. HDMI-A-1), or "".
-      first_connected() {
-        local status dir
-        for status in /sys/class/drm/card*-HDMI-A-*/status; do
-          [ -e "$status" ] || continue
-          if [ "$(cat "$status" 2>/dev/null)" = "connected" ]; then
-            dir=$(basename "$(dirname "$status")")   # e.g. card0-HDMI-A-1
-            printf '%s' "''${dir#card*-}"            # -> HDMI-A-1
-            return 0
-          fi
-        done
-        # nothing connected: print nothing (caller treats "" as no-output)
-      }
-
-      # The connector to render on right now, per mode ("" if none available).
-      pick_target() {
-        if [ "$mode" = "fixed" ]; then
-          if connector_connected "$fixed_connector"; then printf '%s' "$fixed_connector"; fi
-        else
-          first_connected
-        fi
-      }
-
-      mpv_pid=""
-      cleanup() { if [ -n "$mpv_pid" ]; then kill "$mpv_pid" 2>/dev/null || true; fi; }
-      trap cleanup EXIT
-      ${lib.optionalString (cfg.source == "v4l2") ''
-        # v4l2 is single-open: while this holds the capture device the web KVM's
-        # video is unavailable (first grabber wins). Say so loudly — a dark remote
-        # view is otherwise a silent, confusing failure of the KVM's main job.
-        echo "pikvm-local-display: source=v4l2 holds ${cfg.device} EXCLUSIVELY — the web UI video is UNAVAILABLE while this runs." >&2
-      ''}
-      ${lib.optionalString (cfg.source == "mjpeg") ''
-        # mjpeg reads the shared stream, so the web UI keeps working. This relies
-        # on mpv-as-a-persistent-client keeping kvmd's on-demand streamer up.
-        # UNVERIFIED on HW — if kvmd drops the streamer despite an active client,
-        # an explicit kvmd always-on config is the follow-up.
-        echo "pikvm-local-display: source=mjpeg — keeping the shared stream open (streamer-always-on via a persistent client; UNVERIFIED on HW)." >&2
-      ''}
-
-      while true; do
-        target="$(pick_target)"
-        if [ -z "$target" ]; then
-          echo "pikvm-local-display: no target output for mode=$mode; waiting for hotplug" >&2
-          sleep 2
-          continue
-        fi
-        echo "pikvm-local-display: rendering on connector $target (mode=$mode)" >&2
-        ${lib.getExe cfg.package} --drm-connector="$target" ${lib.escapeShellArgs playerArgs} &
-        mpv_pid=$!
-        # Re-render if our target changes underneath us (move in auto, unplug in fixed).
-        while kill -0 "$mpv_pid" 2>/dev/null; do
-          sleep 2
-          now="$(pick_target)"
-          if [ "$now" != "$target" ]; then
-            echo "pikvm-local-display: target changed ($target -> ''${now:-none}); re-rendering" >&2
-            kill "$mpv_pid" 2>/dev/null || true
-            break
-          fi
-        done
-        wait "$mpv_pid" 2>/dev/null || true
-        mpv_pid=""
-        sleep 1
-      done
-    '';
+    text =
+      ''
+        mode=${lib.escapeShellArg cfg.mode}
+        fixed_connector=${lib.escapeShellArg cfg.captureConnector}
+        drm_root=${lib.escapeShellArg cfg.sysfsDrmRoot}
+        mpv_exe=${lib.escapeShellArg (lib.getExe cfg.package)}
+        player_args=(${lib.escapeShellArgs playerArgs})
+        ${lib.optionalString (cfg.source == "v4l2") ''
+          # v4l2 is single-open: while this holds the capture device the web KVM's
+          # video is unavailable (first grabber wins). Say so loudly — a dark remote
+          # view is otherwise a silent, confusing failure of the KVM's main job.
+          echo "pikvm-local-display: source=v4l2 holds ${cfg.device} EXCLUSIVELY — the web UI video is UNAVAILABLE while this runs." >&2
+        ''}
+        ${lib.optionalString (cfg.source == "mjpeg") ''
+          # mjpeg reads the shared stream, so the web UI keeps working. This relies
+          # on mpv-as-a-persistent-client keeping kvmd's on-demand streamer up.
+          # UNVERIFIED on HW — if kvmd drops the streamer despite an active client,
+          # an explicit kvmd always-on config is the follow-up.
+          echo "pikvm-local-display: source=mjpeg — keeping the shared stream open (streamer-always-on via a persistent client; UNVERIFIED on HW)." >&2
+        ''}
+      ''
+      + builtins.readFile ./local-display-run.sh;
   };
+
+  # Setting DeviceAllow AT ALL flips systemd's DevicePolicy to "closed"
+  # (deny-by-default) for the whole unit — it doesn't just ADD an allowance,
+  # it also revokes the implicit access every process normally has to its own
+  # controlling TTY. Without "char-tty rw" here, this unit's own
+  # TTYPath=/dev/tty<vt> + StandardInput=tty-force below is silently denied by
+  # the SAME sandboxing that's supposed to scope down DRM/capture access,
+  # crash-looping on "Permission denied" (exit 208/STDIN). HW-confirmed on a
+  # real deploy (it-03400, 2026-08-24) — the fix alone made the reported
+  # crash-loop stop AND auto-mode render for real (kernel-level scanout
+  # check, not just the app's own self-report).
+  #
+  # STRUCTURAL GUARD, not just a comment: `mandatoryDeviceAllow` is the ONLY
+  # place this pair is written, kept separate from the v4l2-conditional
+  # addition below so a future extra device rule gets appended to a NEW list
+  # rather than edited into this one — and the assertion in `config` fails
+  # eval loudly if it's ever dropped anyway, instead of silently reintroducing
+  # the crash.
+  mandatoryDeviceAllow = [
+    "char-drm rw"
+    "char-tty rw"
+  ];
+  deviceAllow = mandatoryDeviceAllow ++ lib.optional (cfg.source == "v4l2") "${cfg.device} rw";
+
+  ttyPath = "/dev/tty${toString cfg.vt}";
+  gettyUnit = "getty@tty${toString cfg.vt}.service";
 in
 {
   options.services.pikvm.localDisplay = {
@@ -309,9 +288,44 @@ in
         (`--vo=drm`); a different `package` will need its own flags here.
       '';
     };
+
+    vt = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 2;
+      description = ''
+        Virtual terminal the player runs on. `TTYPath` and the conflicting
+        `getty@ttyN.service` unit are BOTH derived from this single value —
+        previously typed twice (`/dev/tty2` in `TTYPath` and `2` in the getty
+        unit reference), which could silently drift out of sync.
+      '';
+    };
+
+    sysfsDrmRoot = lib.mkOption {
+      type = lib.types.path;
+      default = "/sys/class/drm";
+      internal = true;
+      description = ''
+        Root the connector-detection supervisor globs under (`<root>/card*-
+        <connector>/status`). Internal knob so tests can point it at fake
+        connector/status files instead of real DRM sysfs — not meant to be
+        set on a real deployment.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = lib.elem "char-tty rw" deviceAllow;
+        message = ''
+          pikvm-local-display: DeviceAllow must always include "char-tty rw" —
+          dropping it flips DevicePolicy=closed and denies this unit's own
+          TTYPath/StandardInput=tty-force, crash-looping with Permission
+          denied (HW-confirmed regression, it-03400 2026-08-24).
+        '';
+      }
+    ];
+
     systemd.services.pikvm-local-display = {
       description = "PiKVM local DRM display (mirror captured HDMI-IN to a micro-HDMI output)";
       wantedBy = [ "multi-user.target" ];
@@ -320,19 +334,19 @@ in
       # should not tear the display down — the supervisor retries.
       after = [
         "kvmd.service"
-        "getty@tty2.service"
+        gettyUnit
       ];
       wants = [ "kvmd.service" ];
       # NixOS's getty module aliases autovt@.service to getty@.service, and
       # logind hardcodes spawning autovt@ttyN.service on any VT switch — so
-      # without this, a physical switch to VT2 races a getty against mpv for
-      # /dev/tty2 ownership (mirrors nixpkgs' own cage.nix, which conflicts+
-      # afters getty@tty1.service for the identical reason: TTYPath + a getty
-      # template both wanting the same VT). This is a systemd TTY-ownership
-      # question, distinct from the DRM-master/fbcon coexistence risk above —
-      # closing it doesn't touch that finding, just stops the two units
-      # fighting over the device node itself.
-      conflicts = [ "getty@tty2.service" ];
+      # without this, a physical switch to the VT races a getty against mpv
+      # for the tty device ownership (mirrors nixpkgs' own cage.nix, which
+      # conflicts+afters getty@tty1.service for the identical reason: TTYPath
+      # + a getty template both wanting the same VT). This is a systemd
+      # TTY-ownership question, distinct from the DRM-master/fbcon
+      # coexistence risk above — closing it doesn't touch that finding, just
+      # stops the two units fighting over the device node itself.
+      conflicts = [ gettyUnit ];
       serviceConfig = {
         ExecStart = lib.getExe runner;
         Restart = "always";
@@ -341,7 +355,7 @@ in
         # it logs "Can't open TTY for VT control"). it-03400 measured this direct
         # path taking the CRTC cleanly — openvt was rejected (it leaves stale VT
         # state that breaks the next start).
-        TTYPath = "/dev/tty2";
+        TTYPath = ttyPath;
         StandardInput = "tty-force";
         StandardOutput = "journal";
         StandardError = "journal";
@@ -352,22 +366,7 @@ in
           "video"
           "render"
         ];
-        # Setting DeviceAllow AT ALL flips systemd's DevicePolicy to "closed"
-        # (deny-by-default) for the whole unit — it doesn't just ADD an
-        # allowance, it also revokes the implicit access every process
-        # normally has to its own controlling TTY. Without "char-tty rw" here,
-        # this unit's own TTYPath=/dev/tty2 + StandardInput=tty-force above is
-        # silently denied by the SAME sandboxing that's supposed to scope down
-        # DRM/capture access, crash-looping on "Permission denied"
-        # (exit 208/STDIN). HW-confirmed on a real deploy (it-03400,
-        # 2026-08-24) — the fix alone made the reported crash-loop stop AND
-        # auto-mode render for real (kernel-level scanout check, not just the
-        # app's own self-report).
-        DeviceAllow = [
-          "char-drm rw"
-          "char-tty rw"
-        ]
-        ++ lib.optional (cfg.source == "v4l2") "${cfg.device} rw";
+        DeviceAllow = deviceAllow;
         # Moderate hardening — the player needs GPU/DRM, so no ProtectSystem=strict
         # sandbox that would hide /dev/dri; tighten once a live run shows what it
         # actually touches.

@@ -195,8 +195,8 @@ in
       # On when both the hidMode apparatus AND the built-in MCP are enabled —
       # the endpoint is only useful if there's a switch to trigger and an MCP to
       # trigger it. Mirrors the hid-recovery endpoint's MCP-tied default.
-      default = hidModeCfg.enable && (config.services.pikvm-mcp.enable or false);
-      defaultText = lib.literalExpression "config.services.pikvm.kvmd.hidMode.enable && config.services.pikvm-mcp.enable";
+      default = hidModeCfg.enable && config.services.pikvm.mcp.enabled;
+      defaultText = lib.literalExpression "config.services.pikvm.kvmd.hidMode.enable && config.services.pikvm.mcp.enabled";
       example = true;
       description = ''
         The authenticated loopback HID-mode endpoint (GET /hidmode reads the
@@ -306,20 +306,24 @@ in
 
       networking.firewall = { }; # loopback only; nothing to open
     }
-
-    # Point the MCP server at us — the URL via the pikvm-mcp module's first-class
-    # `hidModeUrl` option (EVAL-VISIBLE, so the module's target⊕hidModeUrl
-    # mutual-exclusion assertion actually protects); the secret token stays in the
-    # runtime EnvironmentFile below (never a nix value → no /nix/store leak). Only
-    # when pikvm-mcp is actually present.
-    (lib.mkIf (config.services.pikvm-mcp.enable or false) {
+    # Point the MCP server at us — via the always-declared write-side proxies
+    # in mcp-integration.nix (services.pikvm.mcp.hidModeUrl/.forceTargetNull),
+    # never services.pikvm-mcp.* directly: that option path only exists when
+    # the upstream MCP module is imported, and a STRUCTURAL guard here (even
+    # `lib.optional cfg.declared (...)`) hits real infinite recursion — see
+    # mcp-integration.nix's header for the confirmed `nix eval --show-trace`
+    # mechanism. A plain `mkIf` on the proxies below is safe: they're always
+    # declared by this file regardless of MCP's presence, and
+    # mcp-integration.nix alone forwards them into the real
+    # services.pikvm-mcp.* when it's actually declared.
+    (lib.mkIf config.services.pikvm.mcp.enabled {
       # URL-driven ⟺ target-independent: the MCP derives HID mode from this
       # endpoint's GET /hidmode, so force the flake wrapper's
       # `target = mkDefault "desktop"` to null → the module omits `--target`
       # (both-set is a runtime fail-fast the #46 module now rejects at eval).
       # Single source: hidModeUrl set here ⟺ target null here.
-      services.pikvm-mcp.hidModeUrl = "http://127.0.0.1:${toString cfg.port}/hidmode";
-      services.pikvm-mcp.target = lib.mkForce null;
+      services.pikvm.mcp.hidModeUrl = "http://127.0.0.1:${toString cfg.port}/hidmode";
+      services.pikvm.mcp.forceTargetNull = true;
 
       systemd.services.pikvm-mcp = {
         after = [ "pikvm-hidmode-token.service" ];

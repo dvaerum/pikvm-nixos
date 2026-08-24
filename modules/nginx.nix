@@ -154,14 +154,15 @@ in
     upstream = {
       address = lib.mkOption {
         type = lib.types.str;
-        default = config.services.pikvm-mcp.address or "127.0.0.1";
-        defaultText = lib.literalExpression "config.services.pikvm-mcp.address";
+        default =
+          if config.services.pikvm.mcp.address != null then config.services.pikvm.mcp.address else "127.0.0.1";
+        defaultText = lib.literalExpression "config.services.pikvm.mcp.address";
         description = "Address of the MCP HTTP backend to proxy /mcp to (loopback).";
       };
       port = lib.mkOption {
         type = lib.types.port;
-        default = config.services.pikvm-mcp.port or 3000;
-        defaultText = lib.literalExpression "config.services.pikvm-mcp.port";
+        default = if config.services.pikvm.mcp.port != null then config.services.pikvm.mcp.port else 3000;
+        defaultText = lib.literalExpression "config.services.pikvm.mcp.port";
         description = "Port of the MCP HTTP backend.";
       };
     };
@@ -297,7 +298,10 @@ in
     # parallel, can starve it into a crash-loop. Wait for the API socket to exist
     # (kvmd only binds it past on_startup). Integration fact (local kvmd) — lives
     # here, not in the standalone MCP module.
-    systemd.services.pikvm-mcp = lib.mkIf (config.services.pikvm-mcp.enable or false) {
+    # systemd.services.<name> is a generic, always-valid option path (unlike
+    # services.pikvm-mcp.* itself), so this write is safe as a bare mkIf even
+    # when services.pikvm-mcp isn't declared — no structural guard needed here.
+    systemd.services.pikvm-mcp = lib.mkIf config.services.pikvm.mcp.enabled {
       after = [ "kvmd.service" ];
       wants = [ "kvmd.service" ];
       serviceConfig.ExecStartPre = pkgs.writeShellScript "wait-for-kvmd-sock" ''

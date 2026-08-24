@@ -219,6 +219,62 @@
             pkgs.runCommand "pikvm-appliance-standalone" {
               drv = builtins.unsafeDiscardStringContext drv;
             } "printf '%s\\n' \"$drv\" > $out";
+
+          # Standalone-composability gate: nixosModules.pikvm is documented
+          # (below, this file) as importable WITHOUT nixosModules.mcp-server —
+          # this check PROVES that, rather than leaving it an assertion nobody
+          # verifies. This is the exact composition that broke once already:
+          # every module referencing services.pikvm-mcp.* threw "The option
+          # `services.pikvm-mcp' does not exist" at eval, invisible to every
+          # OTHER check here because they all go through nixosConfigurations
+          # (hosts/), which always bundles mcp-server.
+          module-standalone =
+            let
+              # Minimal fs/boot stub — just enough for a bare nixosSystem's
+              # toplevel to evaluate without a real board's hardware config.
+              stub = {
+                fileSystems."/" = {
+                  device = "/dev/disk/by-label/NIXOS_SD";
+                  fsType = "ext4";
+                };
+                boot.loader.grub.enable = false;
+                services.pikvm.otg.enable = true;
+                services.pikvm.web.enable = true;
+                # hidLatchMonitor's real default package comes from the (here,
+                # absent) MCP module — give it something so ENABLING it
+                # (otg.enable=true defaults it on) doesn't itself fail on the
+                # null-package assertion this same Phase 1 fix added.
+                services.pikvm.hidLatchMonitor.package = pkgs.hello;
+              };
+              # unsafeDiscardStringContext — see the matching comment on
+              # host-eval's hostDrvs above: without it, `nix build` on this
+              # check silently realizes the FULL stub system (kernel
+              # included) instead of just instantiating it.
+              evalDrvPath =
+                extraModules:
+                builtins.unsafeDiscardStringContext (lib.nixosSystem {
+                  inherit system;
+                  modules = [ self.nixosModules.pikvm ] ++ extraModules;
+                }).config.system.build.toplevel.drvPath;
+            in
+            # NEGATIVE CONTROL, checked first: the same composition WITHOUT the
+            # stub must still fail (no fileSystems/boot config — an ordinary,
+            # expected NixOS requirement, unrelated to the MCP-optionality bug
+            # this Phase 1 fixes). This is the check whose absence let the bug
+            # ship: without proof the mechanism can detect A failure, a
+            # positive-only check risks silently passing for the wrong reason
+            # (e.g. `.drvPath` not forced deeply enough to surface an error).
+            assert lib.assertMsg (!(builtins.tryEval (evalDrvPath [ ])).success) ''
+              checks.module-standalone's negative control failed: nixosModules.pikvm
+              ALONE (no fs/boot stub) evaluated successfully. Either something now
+              provides fileSystems/boot config by default (update this check's stub
+              accordingly) or this check's own failure-detection is broken — in
+              either case this check can no longer prove the positive case below
+              means what it claims to.
+            '';
+            pkgs.runCommand "pikvm-module-standalone" {
+              drv = evalDrvPath [ stub ];
+            } "printf '%s\\n' \"$drv\" > $out";
         }
       );
 

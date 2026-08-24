@@ -44,12 +44,16 @@ in
     };
 
     package = lib.mkOption {
-      type = lib.types.package;
-      default = config.services.pikvm-mcp.package or pkgs.pikvm-mcp-server;
-      defaultText = lib.literalExpression "config.services.pikvm-mcp.package";
+      type = lib.types.nullOr lib.types.package;
+      default = config.services.pikvm.mcp.package;
+      defaultText = lib.literalExpression "config.services.pikvm.mcp.package";
       description = ''
         The package providing `bin/pikvm-hid-latch-monitor`. Defaults to the
-        built-in MCP server package (the classifier + local source ship there).
+        built-in MCP server package (the classifier + local source ship there)
+        — null when `services.pikvm-mcp` isn't imported at all, in which case
+        this must be set explicitly (see the assertion below). The OLD default
+        (`pkgs.pikvm-mcp-server`) pointed at an overlay attribute this flake
+        never actually adds anywhere — confirmed absent via real `nix eval`.
       '';
     };
 
@@ -106,6 +110,20 @@ in
   };
 
   config = lib.mkIf (config.services.pikvm.otg.enable && cfg.enable) {
+    assertions = [
+      {
+        assertion = cfg.package != null;
+        message = ''
+          services.pikvm.hidLatchMonitor is enabled but its `package` resolved
+          to null — the default derives from services.pikvm.mcp.package, which
+          is only set when the upstream MCP module (services.pikvm-mcp, e.g.
+          via nixosModules.mcp-server) is also imported. Either import that
+          module, or set services.pikvm.hidLatchMonitor.package explicitly to
+          a package providing bin/pikvm-hid-latch-monitor.
+        '';
+      }
+    ];
+
     systemd.services.pikvm-hid-latch-monitor = {
       description = "PiKVM HID-latch monitor (report-only)";
       wantedBy = [ "multi-user.target" ];

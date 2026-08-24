@@ -81,9 +81,9 @@ let
   # appliance's HID mode — today, and at RUNTIME once the mode is switchable.
   # The single-source-of-truth fix is for the MCP to derive target from GET
   # /hidmode (routed to the MCP node as a #51 follow-up); until then, surface the
-  # disagreement instead of letting it sit silent. `or null` ⇒ no-op when the MCP
-  # module isn't imported.
-  mcpTarget = config.services.pikvm-mcp.target or null;
+  # disagreement instead of letting it sit silent. Already null when the MCP
+  # module isn't imported (services.pikvm.mcp.target's own default).
+  mcpTarget = config.services.pikvm.mcp.target;
   mcpTargetDisagrees = mcpTarget != null && mcpTarget != cfg.default;
 in
 {

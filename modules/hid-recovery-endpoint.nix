@@ -149,8 +149,8 @@ in
       # token auto-generated at first boot, polkit-least-privilege → safe to
       # default on. Stays off when the MCP is off (e.g. zero2w), where it would
       # be a pointless idle server. Set explicitly to override either way.
-      default = config.services.pikvm-mcp.enable or false;
-      defaultText = lib.literalExpression "config.services.pikvm-mcp.enable";
+      default = config.services.pikvm.mcp.enabled;
+      defaultText = lib.literalExpression "config.services.pikvm.mcp.enabled";
       example = true;
       description = ''
         The authenticated loopback HID-recovery endpoint that lets the MCP server
@@ -262,11 +262,23 @@ in
     }
 
     # Point the MCP server at us — static URL as an env var; the secret token
-    # via the runtime EnvironmentFile. Only when pikvm-mcp is actually present.
-    (lib.mkIf (config.services.pikvm-mcp.enable or false) {
-      services.pikvm-mcp.extraEnv.PIKVM_HID_RECOVERY_URL =
+    # via the runtime EnvironmentFile. Only when pikvm-mcp is actually
+    # present. Written to the ALWAYS-DECLARED services.pikvm.mcp.extraEnv
+    # proxy (modules/mcp-integration.nix), not services.pikvm-mcp.extraEnv
+    # directly — that option only exists when the upstream module is
+    # imported, and a module gating its OWN write on that presence (even via
+    # a structural lib.optional, not just a bare mkIf) is a confirmed
+    # infinite recursion (see mcp-integration.nix's header for the real `nix
+    # eval --show-trace` finding). The proxy forwards this unconditionally
+    # and harmlessly when MCP isn't declared — this module never needs to
+    # know or care.
+    (lib.mkIf config.services.pikvm.mcp.enabled {
+      services.pikvm.mcp.extraEnv.PIKVM_HID_RECOVERY_URL =
         "http://127.0.0.1:${toString cfg.port}/hid-recovery";
 
+      # systemd.services.<name> is a generic, always-valid option path
+      # (unlike services.pikvm-mcp.* itself), so this write is safe
+      # regardless of whether services.pikvm-mcp is declared.
       systemd.services.pikvm-mcp = {
         after = [ "pikvm-hid-recovery-token.service" ];
         wants = [ "pikvm-hid-recovery-token.service" ];

@@ -10,9 +10,13 @@
 #   /api/media*  → kvmd-media (unix:/run/kvmd/media.sock)
 #   /redfish     → kvmd
 #   /mcp         → the PiKVM MCP server (Streamable HTTP)
-# The /janus/ws WebRTC blocks are carried verbatim from stock but inert until
-# Janus is packaged (Phase 3) — without it they 502/404 and the UI falls back to
-# MJPEG. See docs/faithful-pikvm-plan.md.
+# The /janus/ws WebRTC blocks are carried verbatim from stock; the janus.js /
+# adapter.js static aliases are path-patched the same way the web root is
+# (see serverConf below — pkgs.pikvm.janus-web-client, added 2026-08-20).
+# Whether they actually SERVE anything live depends on services.pikvm.janus
+# .enable (modules/janus.nix) — without it, /janus/ws still 502s (nothing
+# listens on the janus-ws upstream) and the UI falls back to MJPEG, same as
+# before. See docs/faithful-pikvm-plan.md.
 #
 # AUTH is stock: the UI uses nginx `auth_request /auth_check` → kvmd /auth/check;
 # /api* + /redfish + /mcp set `auth_request off` and self-authenticate (kvmd's
@@ -76,16 +80,21 @@ let
   };
   webRoot = composedWeb;
 
-  # The stock server-context config, path-patched: the ONLY Arch path that must
-  # change is the static web root (/usr/share/kvmd → the package). The unix-socket
-  # upstreams (/run/kvmd/*), the /etc/kvmd/nginx/* includes, /etc/kvmd/web.css and
-  # the janus.js aliases are correct/inert as-is. (runCommand reads the real file
-  # on the Linux builder; `include`d below rather than readFile so it evals on any
-  # host without realising the aarch64 kvmd closure.)
+  # The stock server-context config, path-patched. Two Arch paths must change:
+  # the static web root (/usr/share/kvmd → the package) and, since 2026-08-20,
+  # the janus.js/adapter.js aliases (/usr/share/janus/javascript → the
+  # janus-web-client package — MEASURED: that path does not and never will
+  # exist on NixOS, so leaving it unpatched isn't "inert", it's a permanent
+  # 404 even once Janus itself is running). The unix-socket upstreams
+  # (/run/kvmd/*) and the /etc/kvmd/nginx/* includes ARE correct as-is.
+  # (runCommand reads the real file on the Linux builder; `include`d below
+  # rather than readFile so it evals on any host without realising the
+  # aarch64 kvmd closure.)
   serverConf = pkgs.runCommand "kvmd-nginx-server.conf" { } ''
     substitute ${stockNginx}/kvmd.ctx-server.conf "$out" \
       --replace-quiet /usr/share/kvmd/web ${webRoot} \
-      --replace-quiet /usr/share/kvmd ${kvmd}/share/kvmd
+      --replace-quiet /usr/share/kvmd ${kvmd}/share/kvmd \
+      --replace-quiet /usr/share/janus/javascript ${pkgs.pikvm.janus-web-client}/share/janus-web-client
   '';
 
   # kvmd's nginx includes are self-contained directive snippets with no embedded

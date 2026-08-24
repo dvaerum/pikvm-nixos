@@ -10,6 +10,7 @@
     ./hidmode.nix
     ./hidmode-endpoint.nix
     ./nginx.nix
+    ./janus.nix
     ./hid-recovery.nix
     ./hid-recovery-endpoint.nix
     ./hid-latch-monitor.nix

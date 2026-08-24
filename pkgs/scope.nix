@@ -10,9 +10,15 @@ let
   # µStreamer's Python memsink module, built from the same source; kvmd does
   # `import ustreamer` and won't start without it.
   ustreamer-python = pythonPackages.callPackage ./python/ustreamer { inherit ustreamer; };
+  # A separate named variant rather than flipping the default: withJanus
+  # pulls in a large stack (janus-gateway, glib, alsa, ...) that most builds
+  # of this flake never need. modules/janus.nix opts services.pikvm.kvmd
+  # .ustreamer into THIS specific package when services.pikvm.janus.enable;
+  # everyone else keeps the lean default.
+  ustreamer-janus = ustreamer.override { withJanus = true; };
 in
 {
-  inherit ustreamer luma-oled ustreamer-python;
+  inherit ustreamer luma-oled ustreamer-python ustreamer-janus;
   kvmd = pythonPackages.callPackage ./kvmd {
     inherit luma-oled ustreamer-python;
     # Xlib is `xlib` on 26.05 and `python-xlib` on unstable — accept either so
@@ -28,4 +34,8 @@ in
   # PiKVM web Terminal static artifacts (ttyd). `kvmd` resolves from this scope;
   # `ttyd` from nixpkgs. Exposes passthru.{extrasDir,webDir,ttyd} for the module.
   kvmd-webterm = scope.callPackage ./kvmd-webterm { };
+
+  # The browser-side Janus WebRTC client kvmd's stream_janus.js imports but
+  # never ships itself. See pkgs/janus-web-client/default.nix.
+  janus-web-client = scope.callPackage ./janus-web-client { };
 }

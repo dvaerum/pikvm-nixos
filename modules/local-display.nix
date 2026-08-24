@@ -15,37 +15,49 @@
 # measured live on real appliance silicon at 1080p30 (it-03400) and georg has seen
 # the picture.
 #
-# `mode` governs the two micro-HDMI port roles:
-#   * fixed (DEFAULT): capture pinned to `captureConnector`; the OTHER micro-HDMI
-#     stays the system console (boot log + login getty). Deterministic — a box
-#     always boots a usable console on a known port, capture on the other.
+# `mode` governs which micro-HDMI(s) render the capture:
+#   * fixed (DEFAULT): capture is PINNED to `captureConnector`, full stop. This is
+#     a deliberately NARROWED promise (see the risk note below) — it does NOT
+#     claim anything about the other micro-HDMI, which may go frozen/blank while
+#     mpv holds it. Deterministic: a box always renders capture on a known port.
 #   * auto: capture FOLLOWS whichever micro-HDMI is connected, re-rendering when
 #     the cable moves (the hotplug supervisor). ⚠️ the exact unplug/replug/move
 #     recovery is UNMEASURED on HW — needs an on-appliance characterization with
 #     georg before `auto` is called proven.
-#   * both: mirror to both outputs, no console — HELD (eval-errors) until georg
-#     locks the semantics.
+# A `both` (mirror to both outputs) mode was drafted and dropped — not merely
+# held: it needs semantics nobody has locked (which connector keeps a console?
+# none, per the DRM-master finding below), so exposing it as a selectable enum
+# value (even assertion-blocked) documented a capability that doesn't exist.
+# Re-add it if/when the semantics are real, not before.
 #
 # ⚠️ Capture is capped at the DONGLE's 1920x1080 hardware ceiling (measured: UVC
 # device, no higher mode, source timings unreadable). If the source outputs
 # >1080p the dongle downscales IN HARDWARE — no module setting recovers it;
 # sharpness beyond that is a source/dongle matter, out of scope here.
 #
-# ⚠️ KNOWN RISK on `fixed`'s "reserved console on the other micro-HDMI": it is
-# UNVERIFIED and likely INFEASIBLE with mpv. Two independent mechanisms point the
-# same way: (1) VTs are global, not per-connector — fbcon renders the active VT on
+# ⚠️ RESOLVED (2026-08-24): `fixed` mode does NOT reserve a live console on the
+# other micro-HDMI, and never will with mpv. Two independent mechanisms both rule
+# it out: (1) VTs are global, not per-connector — fbcon renders the active VT on
 # every output, so mpv switching VTs moves the console off all of them; (2) DRM
 # master is per-DEVICE — both micro-HDMI are connectors on ONE vc4 card, so mpv
 # taking master to drive its connector suspends fbcon device-wide, leaving the
 # other connector frozen/blank rather than a live login. The only clean fix is DRM
 # leasing one connector to the app while fbcon keeps the rest, which mpv does not
-# do. The serial console (console=serial0) stays available regardless. Settling
-# this needs a two-monitor on-HW check (a hardware prerequisite for georg).
+# do. This is a genuine mpv/DRM limitation, not a missing on-HW check — a
+# two-monitor test would only confirm the mechanism above, not change the
+# conclusion, so it is NOT a blocker for shipping `fixed` mode as scoped now.
+# `fixed`'s promise is narrowed accordingly: it pins capture to a connector, full
+# stop. The serial console (console=serial0) + SSH are the real, always-available
+# admin fallback regardless of mode — they never depended on this feature.
 #
-# ⚠️ HELD: opt-in (default off), NOT enabled on any host. The DRM path is proven
-# (georg saw the picture); what's unconfirmed is this MODULE's own wiring (VT +
-# supervisor), the per-mode console coexistence (above), and the auto-mode
-# unplug/replug/move recovery. Deploy only on georg's explicit greenlight.
+# Opt-in (default off); no host enables it yet. Greenlit for deployment
+# 2026-08-24 (georg) with `fixed` mode's promise narrowed as above — that closes
+# the console-coexistence question, so it's no longer a blocker. Still open,
+# tracked separately, not blocking `fixed`-mode deployment: the `auto`-mode
+# unplug/replug/move recovery (needs an on-appliance characterization —
+# it-03400) and a live two-monitor coexistence smoke-test (georg, opportunistic
+# — the DRM-master conclusion above doesn't need it to be trusted, but seeing it
+# firsthand is still worth doing when convenient).
 {
   config,
   lib,
@@ -192,23 +204,22 @@ in
       type = lib.types.enum [
         "fixed"
         "auto"
-        "both"
       ];
       default = "fixed";
       description = ''
-        Which micro-HDMI shows the capture vs stays the console.
+        Which micro-HDMI renders the capture.
 
-        `fixed` (default): capture is PINNED to `captureConnector`; the OTHER
-        micro-HDMI keeps the system console (boot log + login getty). The Pi4
-        gives each micro-HDMI its own CRTC, so the render binds only the capture
-        connector and the console stays on the other. Deterministic port roles.
+        `fixed` (default): capture is PINNED to `captureConnector`. Deterministic
+        — a box always renders capture on a known port. This does NOT reserve a
+        live console on the other micro-HDMI: DRM master is per-DEVICE on the
+        vc4 card, so mpv holding master for its connector suspends fbcon
+        device-wide — the other connector is frozen/blank, not a login prompt,
+        for as long as this service runs. The serial console (console=serial0)
+        and SSH are unaffected and remain the real admin fallback.
 
         `auto`: capture FOLLOWS whichever micro-HDMI is connected and re-renders
-        when the cable moves. No reserved console connector. NOTE: the exact
-        unplug/replug/move recovery is not yet HW-characterized.
-
-        `both`: mirror capture to both outputs, no console — NOT YET IMPLEMENTED
-        (eval-errors); semantics pending.
+        when the cable moves. NOTE: the exact unplug/replug/move recovery is not
+        yet HW-characterized.
       '';
     };
 
@@ -301,27 +312,27 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    # `both` is a specced-but-unimplemented mode: make it uneval-able rather than
-    # let it silently fall through to the auto/first-connected path.
-    assertions = [
-      {
-        assertion = cfg.mode != "both";
-        message = ''
-          services.pikvm.localDisplay.mode = "both" (mirror to both micro-HDMI
-          outputs) is not yet implemented — its semantics are still being locked.
-          Use "fixed" or "auto".
-        '';
-      }
-    ];
-
     systemd.services.pikvm-local-display = {
       description = "PiKVM local DRM display (mirror captured HDMI-IN to a micro-HDMI output)";
       wantedBy = [ "multi-user.target" ];
       # kvmd owns the ustreamer subprocess that serves the MJPEG stream, so the
       # stream exists once kvmd is up. Not BindsTo/Requires: a streamer hiccup
       # should not tear the display down — the supervisor retries.
-      after = [ "kvmd.service" ];
+      after = [
+        "kvmd.service"
+        "getty@tty2.service"
+      ];
       wants = [ "kvmd.service" ];
+      # NixOS's getty module aliases autovt@.service to getty@.service, and
+      # logind hardcodes spawning autovt@ttyN.service on any VT switch — so
+      # without this, a physical switch to VT2 races a getty against mpv for
+      # /dev/tty2 ownership (mirrors nixpkgs' own cage.nix, which conflicts+
+      # afters getty@tty1.service for the identical reason: TTYPath + a getty
+      # template both wanting the same VT). This is a systemd TTY-ownership
+      # question, distinct from the DRM-master/fbcon coexistence risk above —
+      # closing it doesn't touch that finding, just stops the two units
+      # fighting over the device node itself.
+      conflicts = [ "getty@tty2.service" ];
       serviceConfig = {
         ExecStart = lib.getExe runner;
         Restart = "always";
@@ -341,8 +352,20 @@ in
           "video"
           "render"
         ];
+        # Setting DeviceAllow AT ALL flips systemd's DevicePolicy to "closed"
+        # (deny-by-default) for the whole unit — it doesn't just ADD an
+        # allowance, it also revokes the implicit access every process
+        # normally has to its own controlling TTY. Without "char-tty rw" here,
+        # this unit's own TTYPath=/dev/tty2 + StandardInput=tty-force above is
+        # silently denied by the SAME sandboxing that's supposed to scope down
+        # DRM/capture access, crash-looping on "Permission denied"
+        # (exit 208/STDIN). HW-confirmed on a real deploy (it-03400,
+        # 2026-08-24) — the fix alone made the reported crash-loop stop AND
+        # auto-mode render for real (kernel-level scanout check, not just the
+        # app's own self-report).
         DeviceAllow = [
           "char-drm rw"
+          "char-tty rw"
         ]
         ++ lib.optional (cfg.source == "v4l2") "${cfg.device} rw";
         # Moderate hardening — the player needs GPU/DRM, so no ProtectSystem=strict

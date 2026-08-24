@@ -1,12 +1,13 @@
-# The universal PiKVM image.
+# The universal PiKVM image — board facts only (Phase 3 architecture split).
 #
 # ONE flashable SD image that boots on any supported Raspberry Pi and detects
 # its hardware at runtime. This is possible because the generic aarch64
 # sd-image already ships every board's device tree and boots through the
 # Raspberry Pi firmware, which reads config.txt and applies the right overlays
 # for whichever board it lands on. We replace that config.txt with a PiKVM one
-# (conditional per-board filters) and let kvmd's platform detector pick the
-# capture/HID profile at boot (services.pikvm.kvmd.platform = "auto").
+# (conditional per-board filters); the capture/HID profile itself is picked at
+# boot by services.pikvm.kvmd.platform = "auto" (set in
+# profiles/appliance-stack.nix, not here — see that file's header for why).
 #
 # ⚠️ The boot/device-tree/kernel layer is the part that most needs validation
 # on real hardware; the software stack and image assembly are validated by
@@ -23,17 +24,6 @@
     # board-specific nixos-hardware module, which would pin us to one Pi.
     "${modulesPath}/installer/sd-card/sd-image-aarch64.nix"
   ];
-
-  networking.hostName = "pikvm";
-
-  # Devices self-update from THIS configuration (the hostname is "pikvm" but
-  # the flake attribute is "universal").
-  services.pikvm.autoUpgrade.flake = lib.mkDefault "github:dvaerum/pikvm-nixos#universal";
-
-  # PiKVM stack, auto-detecting the platform at boot.
-  services.pikvm.kvmd.enable = true;
-  services.pikvm.kvmd.platform = "auto";
-  services.pikvm.otg.enable = true;
 
   # Capture-bridge + gadget-networking kernel modules (dwc2/libcomposite come
   # from the OTG module).

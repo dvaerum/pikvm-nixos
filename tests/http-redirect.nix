@@ -12,6 +12,7 @@
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix
+      ../modules/mcp-integration.nix
       ../modules/nginx.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off)
     ];

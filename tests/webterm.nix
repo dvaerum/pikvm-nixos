@@ -17,6 +17,7 @@
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix # kvmd.nix references services.pikvm.otg.enable
+      ../modules/mcp-integration.nix
       ../modules/nginx.nix
       ../modules/webterm.nix # declares services.pikvm.web.terminal + the kvmd-webterm unit/user
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)

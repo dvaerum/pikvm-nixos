@@ -32,6 +32,7 @@ let
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix # kvmd.nix references services.pikvm.otg.enable
+      ../modules/mcp-integration.nix
       ../modules/nginx.nix
       self.nixosModules.mcp-server # services.pikvm-mcp
     ];

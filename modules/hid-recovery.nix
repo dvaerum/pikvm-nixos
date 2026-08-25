@@ -30,7 +30,10 @@ let
       pkgs.coreutils
       config.systemd.package # systemctl (reboot action)
     ];
-    text = builtins.readFile ./hid-recover.sh;
+    text = ''
+      HID_RECOVER_GADGET=/sys/kernel/config/usb_gadget/${config.services.pikvm.runtimePaths.otgGadgetName}
+    ''
+    + builtins.readFile ./hid-recover.sh;
   };
 in
 {
@@ -62,6 +65,26 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # This module GRANTS privilege to triggerUser (the polkit rule below) but
+    # doesn't CREATE that user itself — the endpoint module owns that (see
+    # triggerUser's description). If triggerUser is overridden without a
+    # matching endpoint (or the endpoint module isn't imported at all), the
+    # polkit rule silently references a nonexistent user — `systemctl start`
+    # from that user only ever fails at runtime with a confusing polkit
+    # denial, never at eval. Catch it here instead.
+    assertions = [
+      {
+        assertion = config.users.users ? ${cfg.triggerUser};
+        message = ''
+          services.pikvm.hidRecovery.triggerUser = "${cfg.triggerUser}" is not a
+          declared system user. This module only GRANTS it polkit privilege —
+          services.pikvm.hidRecovery.endpoint (or an equivalent module) must
+          actually create it. Enable that endpoint, or create the user
+          yourself if you're wiring up a different trigger.
+        '';
+      }
+    ];
+
     # Templated root oneshot: one privileged recovery action per instance. The
     # instance (%i) is the action string, passed straight to the executor.
     systemd.services."pikvm-hid-recover@" = {

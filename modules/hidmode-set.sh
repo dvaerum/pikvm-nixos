@@ -20,7 +20,12 @@
 # (teardown → rebuild the gadget, the USB re-enumerate) then kvmd (reconnect to
 # the new gadget).
 
-override="/var/lib/kvmd/hidmode.yaml"
+# The nix wrapper injects $HIDMODE_OVERRIDE_PATH (modules/runtime-paths.nix's
+# hidmodeOverride channel — the canonical contract, Finding 3/Phase 2; this
+# path was independently hardcoded here AND in hidmode.nix/hidmode-endpoint.nix
+# before, silently driftable). No fallback: pikvm-hidmode is always built by
+# the nix wrapper, never invoked standalone.
+override="$HIDMODE_OVERRIDE_PATH"
 
 cmd="${1:-}"
 

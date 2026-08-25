@@ -24,8 +24,14 @@
 }:
 let
   cfg = config.services.pikvm.hidLatchMonitor;
-  statusDir = "/run/pikvm-hid-latch";
-  statusPath = "${statusDir}/status.json";
+  # The canonical contract lives in modules/runtime-paths.nix (Finding 3,
+  # Phase 2) — this module is the channel's producer, so it derives its own
+  # RuntimeDirectory/RuntimeDirectoryMode from the SAME values a consumer
+  # (hid-recovery-endpoint.nix) or a test would read, instead of each side
+  # hardcoding its own copy that can drift.
+  statusChannel = config.services.pikvm.runtimePaths.hidLatchStatus;
+  statusPath = statusChannel.path;
+  statusDir = builtins.dirOf statusPath;
 in
 {
   options.services.pikvm.hidLatchMonitor = {
@@ -75,7 +81,8 @@ in
 
     gadget = lib.mkOption {
       type = lib.types.str;
-      default = "kvmd";
+      default = config.services.pikvm.runtimePaths.otgGadgetName;
+      defaultText = lib.literalExpression "config.services.pikvm.runtimePaths.otgGadgetName";
       description = ''
         The configfs USB gadget name — the source corroborates bound-ness with
         `/sys/kernel/config/usb_gadget/<gadget>/UDC` (ENOENT there ⇒ BROKEN, never
@@ -141,10 +148,10 @@ in
         # The status file the loopback endpoint serves. RuntimeDirectory is
         # 0755 so the (different-user) endpoint can traverse in and read the
         # world-readable status.json. UMask=0022 makes the monitor's atomic
-        # write land 0644 REGARDLESS of the inherited default — the endpoint runs
-        # as a different user, so the cross-user read must not depend on systemd's
-        # default umask staying 0022.
-        RuntimeDirectory = "pikvm-hid-latch";
+        # write land at statusChannel.mode (0644) REGARDLESS of the inherited
+        # default — the endpoint runs as a different user, so the cross-user
+        # read must not depend on systemd's default umask staying 0022.
+        RuntimeDirectory = builtins.baseNameOf statusDir;
         RuntimeDirectoryMode = "0755";
         UMask = "0022";
         # Report-only reader: runs as root for `journalctl -k` + the configfs

@@ -16,6 +16,16 @@
 # the pikvm-mcp-server package, + the hid-recovery endpoint). @nixos-developer-system
 # runs the booted VM.
 { self, pkgs }:
+let
+  lib = pkgs.lib;
+  # The canonical runtime-path contract (Finding 3, Phase 2) — read off an
+  # already-assembled real host (same idiom as tests/local-display.nix's
+  # `svc = self.nixosConfigurations.it-03400.config...`) so this test asserts
+  # against the ACTUAL configured path/mode instead of a hand-typed literal
+  # that could silently drift from modules/runtime-paths.nix.
+  statusChannel = self.nixosConfigurations.rpi4.config.services.pikvm.runtimePaths.hidLatchStatus;
+  tokenChannel = self.nixosConfigurations.rpi4.config.services.pikvm.runtimePaths.hidRecoveryToken;
+in
 {
   name = "pikvm-hid-latch-monitor";
 
@@ -23,6 +33,8 @@
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix
+      ../modules/runtime-paths.nix
+      ../modules/mcp-integration.nix
       ../modules/hid-recovery.nix
       ../modules/hid-recovery-endpoint.nix
       ../modules/hid-latch-monitor.nix
@@ -62,17 +74,31 @@
     # (2) it reads the LOCAL UDC and EMITS a status.json. dummy_hcd binds the
     # gadget (function=kvmd) with nothing attached → state "not attached", which
     # while BOUND is healthy under the default set (bound-ness is the real gate).
-    machine.wait_for_file("/run/pikvm-hid-latch/status.json")
-    status = json.loads(machine.succeed("cat /run/pikvm-hid-latch/status.json"))
+    machine.wait_for_file("${statusChannel.path}")
+    status = json.loads(machine.succeed("cat ${statusChannel.path}"))
     assert status["bound"] is True, status          # /sys/class/udc/<udc>/function non-empty
     assert status["healthy"] is True, status         # bound AND state in the acceptable set
     assert status["alert"] is False, status          # not latched
     assert "lastSampleAt" in status, status          # the on-box dead-man liveness field
 
-    # (3) the LOOPBACK ENDPOINT SERVES it — auth-gated (401 without the bearer),
-    # and a cross-user read (endpoint user reads the monitor's status file, so this
-    # also proves the file is world-readable, not root-only).
-    tok = machine.succeed("cat /run/pikvm-hid-recovery/token").strip()
+    # (2b) ADR 0003's gating note, verbatim: "Verify the 0644 status-file mode
+    # by a direct stat/ls -l, not by an endpoint 200." A 200 from a DIFFERENT
+    # user is consistent with 0644 but doesn't PROVE it — a same-group or
+    # differently-permissioned file could also 200 depending on how the two
+    # users happen to be grouped. `stat` proves the exact configured mode
+    # (modules/runtime-paths.nix's hidLatchStatus channel) unambiguously,
+    # independent of which user is asking. `%a` prints WITHOUT a leading
+    # zero (e.g. "644"), unlike the channel's "0644" — strip it for the
+    # comparison.
+    mode_owner = machine.succeed("stat -c '%a %U:%G' ${statusChannel.path}").strip()
+    expected = "${lib.removePrefix "0" statusChannel.mode} ${statusChannel.owner}"
+    assert mode_owner == expected, f"expected {expected!r}, got {mode_owner!r}"
+
+    # (3) the LOOPBACK ENDPOINT SERVES it — auth-gated (401 without the bearer).
+    # This is a REAL cross-user read (the endpoint runs as a different user
+    # than the monitor) but per ADR 0003 it's a CONSISTENCY check, not the
+    # mode proof — (2b) above is the actual proof.
+    tok = machine.succeed("cat ${tokenChannel.path}").strip()
     code = machine.succeed(
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/hid-recovery/latch-status"
     ).strip()

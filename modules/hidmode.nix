@@ -26,6 +26,10 @@
 let
   kvmdCfg = config.services.pikvm.kvmd;
   cfg = kvmdCfg.hidMode;
+  # Canonical contract in modules/runtime-paths.nix (Finding 3, Phase 2) — this
+  # path was independently hardcoded here, in hidmode-set.sh, and in
+  # hidmode-endpoint.nix before, silently driftable.
+  overridePath = config.services.pikvm.runtimePaths.hidmodeOverride.path;
 
   # The canonical per-mode override documents, in kvmd's override.d YAML shape
   # (YAML is a superset of JSON, so toJSON is a valid override). BOTH modes are
@@ -64,6 +68,7 @@ let
     text = ''
       HIDMODE_DESKTOP_YAML=${desktopYaml}
       HIDMODE_IPAD_YAML=${ipadYaml}
+      HIDMODE_OVERRIDE_PATH=${overridePath}
     ''
     + builtins.readFile ./hidmode-set.sh;
   };
@@ -161,7 +166,7 @@ in
     # /var/lib/kvmd itself is created by the kvmd module. This single file is the
     # source of the mode (#53); pikvm-hidmode rewrites it atomically.
     systemd.tmpfiles.rules = [
-      "C /var/lib/kvmd/hidmode.yaml 0644 kvmd kvmd - ${defaultYaml}"
+      "C ${overridePath} 0644 kvmd kvmd - ${defaultYaml}"
       # #53 fast-follow: remove the retired plain-text marker on activation. #53
       # collapsed the mode to the boot-authoritative yaml above and nothing reads
       # the marker anymore, but a box UPGRADED from the pre-#53 scheme still carries
@@ -182,7 +187,7 @@ in
     # with no control surface (units/endpoint gone). Property: persisted mode is
     # INERT without its controller; safe rollback = revert-to-stock (faithfulness).
     # The /var content persists but is simply no longer read once the link is gone.
-    environment.etc."kvmd/override.d/90-hidmode.yaml".source = "/var/lib/kvmd/hidmode.yaml";
+    environment.etc."kvmd/override.d/90-hidmode.yaml".source = overridePath;
 
     # Templated root oneshot: one instance per mode. %i (desktop|ipad) is passed
     # straight to the executor, which validates it.

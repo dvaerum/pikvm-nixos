@@ -22,11 +22,14 @@
 let
   hidModeCfg = config.services.pikvm.kvmd.hidMode;
   cfg = hidModeCfg.endpoint;
+  runtimePaths = config.services.pikvm.runtimePaths;
 
   # Runtime paths (never in the store): the shared token the endpoint reads, and
-  # an EnvironmentFile that injects it into pikvm-mcp's env.
-  tokenPath = "/run/pikvm-hidmode/token";
-  mcpEnvPath = "/run/pikvm-hidmode/mcp.env";
+  # an EnvironmentFile that injects it into pikvm-mcp's env. Canonical contract
+  # in modules/runtime-paths.nix (Finding 3, Phase 2) — this was independently
+  # hardcoded here AND in hidmode-web.nix before, silently driftable.
+  tokenPath = runtimePaths.hidmodeToken.path;
+  mcpEnvPath = runtimePaths.hidmodeMcpEnv.path;
 
   endpoint = pkgs.writeText "pikvm-hidmode-endpoint.py" ''
     import hmac, json, os, subprocess
@@ -34,8 +37,8 @@ let
 
     PORT = int(os.environ["PORT"])
     MODES = {"desktop", "ipad"}
-    OVERRIDE = "/var/lib/kvmd/hidmode.yaml"
-    GADGET = "/sys/kernel/config/usb_gadget/kvmd"
+    OVERRIDE = "${runtimePaths.hidmodeOverride.path}"
+    GADGET = "/sys/kernel/config/usb_gadget/${runtimePaths.otgGadgetName}"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
 
@@ -255,7 +258,7 @@ in
         };
         path = [ pkgs.coreutils ];
         script = ''
-          mkdir -p /run/pikvm-hidmode
+          mkdir -p ${builtins.dirOf tokenPath}
           ${
             if cfg.tokenFile != null then
               ''install -m0640 -g ${hidModeCfg.triggerUser} ${cfg.tokenFile} ${tokenPath}''

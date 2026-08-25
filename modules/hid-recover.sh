@@ -17,7 +17,12 @@
 
 action="${1:-}"
 
-gadget="/sys/kernel/config/usb_gadget/kvmd"
+# The nix wrapper injects $HID_RECOVER_GADGET (modules/runtime-paths.nix's
+# otgGadgetName channel — the canonical contract, Finding 3/Phase 2; this
+# path was independently hardcoded here AND in hidmode-endpoint.nix before,
+# silently driftable). No fallback: pikvm-hid-recover is always built by the
+# nix wrapper, never invoked standalone.
+gadget="$HID_RECOVER_GADGET"
 
 # The single registered UDC (there is exactly one on a PiKVM / in the test VM).
 find_udc() {

@@ -21,6 +21,8 @@
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix
+      ../modules/runtime-paths.nix
+      ../modules/mcp-integration.nix
       ../modules/nginx.nix # imports webterm.nix + hidmode-web.nix
       ../modules/hidmode.nix
       ../modules/hidmode-endpoint.nix

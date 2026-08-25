@@ -23,6 +23,8 @@
     { ... }:
     {
       imports = [
+        ../modules/runtime-paths.nix
+        ../modules/mcp-integration.nix
         ../modules/hid-recovery.nix
         ../modules/hid-recovery-endpoint.nix
         self.nixosModules.mcp-server # services.pikvm-mcp (defaults enable = true)

@@ -19,6 +19,8 @@
     imports = [
       ../modules/kvmd.nix
       ../modules/otg.nix
+      ../modules/runtime-paths.nix
+      ../modules/mcp-integration.nix
       ../modules/hidmode.nix
       ../modules/hidmode-endpoint.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)

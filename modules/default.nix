@@ -5,6 +5,7 @@
 {
   imports = [
     ./mcp-integration.nix
+    ./runtime-paths.nix
     ./deployment.nix
     ./system/auto-upgrade.nix
     ./otg.nix

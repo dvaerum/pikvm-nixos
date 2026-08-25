@@ -21,6 +21,8 @@
       imports = [
         ../modules/kvmd.nix
         ../modules/otg.nix
+        ../modules/runtime-paths.nix
+        ../modules/mcp-integration.nix
         ../modules/hid-recovery.nix
         ../modules/hid-recovery-endpoint.nix
         # Declares services.pikvm-mcp so the endpoint's MCP-wiring definition
@@ -49,6 +51,55 @@
       # endpoint's MCP-wiring definition resolves). It now defaults ON — pin it
       # OFF here so this test doesn't spin up the MCP server (onnxruntime).
       services.pikvm-mcp.enable = false;
+
+      virtualisation.memorySize = 2048;
+      virtualisation.diskSize = 4096;
+    };
+
+  # A SECOND, independent VM with triggerUser overridden away from the
+  # default — proves the polkit grant genuinely follows
+  # services.pikvm.hidRecovery.triggerUser end to end (both the executor's
+  # polkit rule AND the endpoint's own user/group/token ownership), not a
+  # hardcoded literal that happened to match the default. See the "Finding 4"
+  # fix in modules/hid-recovery-endpoint.nix.
+  nodes.customUser =
+    { ... }:
+    {
+      imports = [
+        ../modules/kvmd.nix
+        ../modules/otg.nix
+        ../modules/runtime-paths.nix
+        ../modules/mcp-integration.nix
+        ../modules/hid-recovery.nix
+        ../modules/hid-recovery-endpoint.nix
+        self.nixosModules.mcp-server
+      ];
+
+      services.pikvm.kvmd.enable = true;
+      services.pikvm.kvmd.platform = "auto";
+      services.pikvm.otg.enable = true;
+      services.pikvm.kvmd.settings.kvmd = {
+        msd.type = "disabled";
+        atx.type = "disabled";
+      };
+      boot.kernelModules = [ "dummy_hcd" ];
+
+      services.pikvm.hidRecovery.triggerUser = "custom-recovery-user";
+      services.pikvm.hidRecovery.endpoint.enable = true;
+      services.pikvm-mcp.enable = false;
+
+      # The OLD default trigger user, created independently of the endpoint
+      # module (which now creates "custom-recovery-user" instead) — so the
+      # negative check below fails because polkit DENIES it, not merely
+      # because the user doesn't exist. That distinction is the actual proof
+      # the fix works: before Finding 4, the endpoint hardcoded this
+      # username regardless of triggerUser, so this user would have kept
+      # working even after the override.
+      users.users.pikvm-hid-recovery = {
+        isSystemUser = true;
+        group = "pikvm-hid-recovery";
+      };
+      users.groups.pikvm-hid-recovery = { };
 
       virtualisation.memorySize = 2048;
       virtualisation.diskSize = 4096;
@@ -157,6 +208,38 @@
     machine.succeed(f'echo "{udc}" > {gadget}/UDC')
     machine.wait_until_succeeds(
         f"test \"$(cat /sys/class/udc/{udc}/state)\" = configured", timeout=30
+    )
+
+    # --- Finding 4: triggerUser override (customUser node) --------------
+    # A fully independent VM with services.pikvm.hidRecovery.triggerUser
+    # overridden away from the default. Proves the polkit grant + the
+    # endpoint's own user/group/token ownership all genuinely follow the
+    # config option end to end, not a hardcoded literal.
+    customUser.wait_for_unit("kvmd-otg.service")
+    udc2 = customUser.succeed("ls /sys/class/udc | head -n1").strip()
+    assert udc2, "no UDC registered under /sys/class/udc (customUser)"
+    customUser.wait_until_succeeds(
+        f"test \"$(cat /sys/class/udc/{udc2}/state)\" = configured", timeout=30
+    )
+
+    # positive: the OVERRIDDEN triggerUser can start the recovery unit —
+    # the polkit rule (hid-recovery.nix) and the endpoint's own user
+    # (hid-recovery-endpoint.nix) both moved together.
+    customUser.succeed(
+        "runuser -u custom-recovery-user -- systemctl start pikvm-hid-recover@soft_connect.service"
+    )
+    customUser.wait_until_succeeds(
+        f"test \"$(cat /sys/class/udc/{udc2}/state)\" = configured", timeout=30
+    )
+
+    # negative, LOAD-BEARING: the OLD default username — which still exists
+    # as a real system user on this node (stubbed independently above) — no
+    # longer has the polkit grant. Before the Finding 4 fix, the endpoint
+    # hardcoded this username regardless of triggerUser, so this user would
+    # have kept working even after the override; this is what would have
+    # caught that regression.
+    customUser.fail(
+        "runuser -u pikvm-hid-recovery -- systemctl start pikvm-hid-recover@soft_connect.service"
     )
   '';
 }

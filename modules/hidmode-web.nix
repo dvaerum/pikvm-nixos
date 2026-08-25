@@ -38,8 +38,10 @@ let
   endpointCfg = config.services.pikvm.kvmd.hidMode.endpoint or { };
 
   # The endpoint's own runtime token (provisioned by pikvm-hidmode-token.service
-  # in hidmode-endpoint.nix). We read it, never own it.
-  tokenPath = "/run/pikvm-hidmode/token";
+  # in hidmode-endpoint.nix). We read it, never own it — canonical contract in
+  # modules/runtime-paths.nix (Finding 3, Phase 2); this was independently
+  # hardcoded here AND in hidmode-endpoint.nix before, silently driftable.
+  tokenPath = config.services.pikvm.runtimePaths.hidmodeToken.path;
   authDir = "/run/pikvm-hidmode-proxy";
 
   controlHtml = pkgs.writeText "hidmode-control.html" (builtins.readFile ./hidmode-control.html);

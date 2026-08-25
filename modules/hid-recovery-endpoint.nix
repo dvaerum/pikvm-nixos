@@ -16,12 +16,15 @@
   ...
 }:
 let
-  cfg = config.services.pikvm.hidRecovery.endpoint;
+  hidRecoveryCfg = config.services.pikvm.hidRecovery;
+  cfg = hidRecoveryCfg.endpoint;
+  runtimePaths = config.services.pikvm.runtimePaths;
 
   # Runtime paths (never in the store): the shared token the endpoint reads,
-  # and an EnvironmentFile that injects it into pikvm-mcp's env.
-  tokenPath = "/run/pikvm-hid-recovery/token";
-  mcpEnvPath = "/run/pikvm-hid-recovery/mcp.env";
+  # and an EnvironmentFile that injects it into pikvm-mcp's env. Canonical
+  # contract in modules/runtime-paths.nix (Finding 3, Phase 2).
+  tokenPath = runtimePaths.hidRecoveryToken.path;
+  mcpEnvPath = runtimePaths.hidRecoveryMcpEnv.path;
 
   # The action set is the MCP trigger contract (docs/runbooks/hid-recovery.md);
   # instance names are the action strings verbatim (mixed separators intact).
@@ -35,7 +38,7 @@ let
     # The HID-latch monitor (services.pikvm.hidLatchMonitor) writes its latest
     # classification here each sample; we serve it read-only at
     # GET /hid-recovery/latch-status (see docs/decisions/0003-hid-latch-monitor.md).
-    LATCH_STATUS_PATH = "/run/pikvm-hid-latch/status.json"
+    LATCH_STATUS_PATH = "${runtimePaths.hidLatchStatus.path}"
     with open(os.environ["TOKEN_FILE"], "r") as fh:
         TOKEN = fh.read().strip()
 
@@ -182,15 +185,19 @@ in
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
       # Pull in the privileged executor + units + polkit (kvmd lane), whose
-      # triggerUser defaults to the user we create below.
+      # triggerUser defaults to the user we create below — but reads back
+      # THIS module's own dedicated user via hidRecoveryCfg.triggerUser
+      # rather than a hardcoded literal, so overriding triggerUser actually
+      # moves both sides of the polkit grant together (the executor's rule
+      # and this endpoint's user) instead of silently splitting them.
       services.pikvm.hidRecovery.enable = true;
 
-      users.users.pikvm-hid-recovery = {
+      users.users.${hidRecoveryCfg.triggerUser} = {
         isSystemUser = true;
-        group = "pikvm-hid-recovery";
+        group = hidRecoveryCfg.triggerUser;
         description = "PiKVM HID-recovery loopback endpoint";
       };
-      users.groups.pikvm-hid-recovery = { };
+      users.groups.${hidRecoveryCfg.triggerUser} = { };
 
       # Provision the shared token (unless supplied) + the pikvm-mcp env file.
       systemd.services.pikvm-hid-recovery-token = {
@@ -206,15 +213,15 @@ in
         };
         path = [ pkgs.coreutils ];
         script = ''
-          mkdir -p /run/pikvm-hid-recovery
+          mkdir -p ${builtins.dirOf tokenPath}
           ${
             if cfg.tokenFile != null then
-              ''install -m0640 -g pikvm-hid-recovery ${cfg.tokenFile} ${tokenPath}''
+              ''install -m0640 -g ${hidRecoveryCfg.triggerUser} ${cfg.tokenFile} ${tokenPath}''
             else
               ''
                 if [ ! -s ${tokenPath} ]; then
                   ( umask 027; head -c 32 /dev/urandom | base64 | tr -d '\n' > ${tokenPath} )
-                  chgrp pikvm-hid-recovery ${tokenPath}
+                  chgrp ${hidRecoveryCfg.triggerUser} ${tokenPath}
                   chmod 0640 ${tokenPath}
                 fi
               ''
@@ -236,8 +243,8 @@ in
         requires = [ "pikvm-hid-recovery-token.service" ];
         path = [ pkgs.systemd ]; # systemctl
         serviceConfig = {
-          User = "pikvm-hid-recovery";
-          Group = "pikvm-hid-recovery";
+          User = hidRecoveryCfg.triggerUser;
+          Group = hidRecoveryCfg.triggerUser;
           Environment = [
             "PORT=${toString cfg.port}"
             "TOKEN_FILE=${tokenPath}"

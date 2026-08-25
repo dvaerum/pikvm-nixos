@@ -155,8 +155,22 @@
           # catch it). Eval-only (drvPath — no VM, no realise, seconds).
           host-eval =
             let
+              # `unsafeDiscardStringContext`: a bare `.drvPath` embedded in a
+              # derivation attribute still carries string CONTEXT pointing at
+              # that .drv — Nix treats an in-context .drv reference as a real
+              # inputDrv, which means BUILDING that input's default output
+              # before this runCommand can run at all. Without the discard,
+              # "eval-only, seconds" above is false: `nix build` on this
+              # attribute silently realizes every host's FULL closure (kernel
+              # included — confirmed via a real `nix build -L`, hundreds of
+              # derivations / tens of GiB). Discarding the context keeps the
+              # STRING (the drv path text) while dropping the build
+              # dependency — instantiation (producing the .drv file) still
+              # happens, since concatStringsSep/toJSON below need the actual
+              # path text, but nothing downstream needs it BUILT. See
+              # docs/learnings/nix-drvpath-string-context.md.
               hostDrvs = lib.mapAttrsToList (
-                _: sys: sys.config.system.build.toplevel.drvPath
+                _: sys: builtins.unsafeDiscardStringContext sys.config.system.build.toplevel.drvPath
               ) self.nixosConfigurations;
               applianceMcpEnv =
                 self.nixosConfigurations.rpi4.config.systemd.services.pikvm-mcp.serviceConfig.EnvironmentFile or [ ];
@@ -177,18 +191,34 @@
           # to compose identically today, so host-eval above already exercises
           # this content — but that's incidental, not guaranteed: if `universal`
           # ever stops being "exactly nixosModules.appliance", this check still
-          # catches a break in the actual downstream entry point. Eval-only.
+          # catches a break in the actual downstream entry point.
+          #
+          # unsafeDiscardStringContext (see host-eval's hostDrvs comment above
+          # for the full mechanism): this originally returned
+          # `.config.system.build.toplevel` (the derivation itself, not even
+          # `.drvPath`) as the check's OWN build output — `nix build` on this
+          # attribute WAS the full appliance build, kernel included (confirmed
+          # via a real run: hundreds of derivations, tens of GiB, aarch64
+          # cross-built via QEMU emulation). Fixed the same way: force
+          # `.drvPath` with the string context discarded, via a tiny
+          # runCommand, matching host-eval/module-standalone.
           appliance-standalone =
-            (nixpkgs.lib.nixosSystem {
-              # Fixed aarch64-linux, matching hosts/default.nix's `universal`
-              # (and every real PiKVM target) regardless of the evaluating
-              # host's own architecture — eval-only, so no cross-build needed.
-              system = "aarch64-linux";
-              modules = [
-                self.nixosModules.appliance
-                { networking.hostName = "mykvm"; }
-              ];
-            }).config.system.build.toplevel;
+            let
+              drv =
+                (nixpkgs.lib.nixosSystem {
+                  # Fixed aarch64-linux, matching hosts/default.nix's `universal`
+                  # (and every real PiKVM target) regardless of the evaluating
+                  # host's own architecture — eval-only, so no cross-build needed.
+                  system = "aarch64-linux";
+                  modules = [
+                    self.nixosModules.appliance
+                    { networking.hostName = "mykvm"; }
+                  ];
+                }).config.system.build.toplevel.drvPath;
+            in
+            pkgs.runCommand "pikvm-appliance-standalone" {
+              drv = builtins.unsafeDiscardStringContext drv;
+            } "printf '%s\\n' \"$drv\" > $out";
         }
       );
 

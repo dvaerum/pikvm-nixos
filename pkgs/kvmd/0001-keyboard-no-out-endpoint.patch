@@ -1,0 +1,47 @@
+kvmd-otg's __add_hid() writes no_out_endpoint=1 UNCONDITIONALLY for every HID
+gadget function (keyboard, mouse, mouse_alt alike). That's correct for mouse
+-- its report descriptor has no OUTPUT items, so "no OUT endpoint" is
+consistent with what it advertises. It's WRONG for the keyboard function: its
+own descriptor (kvmd/apps/otg/hid/keyboard.py) explicitly declares an OUTPUT
+report (the LED-state feedback -- Num/Caps/Scroll Lock), so the function ends
+up promising host->device output capability it's simultaneously configured
+with no endpoint to carry. iOS's HID parser is strict enough to reject the
+whole interface over this mismatch: writes to /dev/kvmd-hid-keyboard succeed
+at the syscall level (the kernel driver accepts them into its buffer
+regardless), but nothing ever reaches the host -- HTTP 200 all the way up
+kvmd's own stack, zero visible keystrokes. Confirmed end-to-end on pikvm01
+(georgs-mac-mini's iPad node), 2026-08-23/24: clearing no_out_endpoint for
+hid.usb0 ONLY (mouse's hid.usb1 untouched) fixed keyboard immediately -- real
+text landed, a genuine iOS Spotlight search-suggestions dropdown rendered
+from it -- with mouse re-confirmed unaffected in the same frame. protocol==1
+is kvmd's own Keyboard protocol constant (kvmd/apps/otg/hid/keyboard.py) -- a
+source-grounded discriminator, not a guess: PiKVM's mouse functions use
+protocol 0 (absolute) or 2 (relative), never 1, so this cannot misfire on
+mouse.
+
+A real tracked .patch file rather than a substituteInPlace structural
+edit -- deliberately, per the incident that motivated this: the earlier
+substituteInPlace version (43413ae) inserted this same `if` guard as a
+multi-line replacement string inside a nix ''...'' block, whose indented-
+string dedent silently collapsed the inserted line's indentation, landing it
+flush with the `if` instead of nested under it -- a Python IndentationError
+that shipped past `nix build` (pythonImportsCheck only imports the top
+`kvmd` package, never reaching this submodule) and took down live HID on
+pikvm01 for several minutes (see docs/decisions and pkgs/kvmd/default.nix's
+compileall gate, added alongside this patch for exactly that class of gap).
+A .patch file's context lines are plain bytes with no nix-string-escaping
+step in between source and applied result, so this exact failure mode is
+structurally impossible here.
+
+--- a/kvmd/apps/otg/__init__.py
++++ b/kvmd/apps/otg/__init__.py
+@@ -263,7 +263,8 @@
+     def __add_hid(self, desc: str, starter: list[str], start: bool, remote_wakeup: bool, hid: Hid) -> None:
+         func = f"hid.usb{self.__hid_instance}"
+         func_path = self.__create_function(func)
+-        _write(join(func_path, "no_out_endpoint"), "1", optional=True)
++        if hid.protocol != 1:  # Keyboard declares an OUTPUT report (LEDs); needs the OUT endpoint.
++            _write(join(func_path, "no_out_endpoint"), "1", optional=True)
+         if remote_wakeup:
+             _write(join(func_path, "wakeup_on_write"), "1", optional=True)
+         _write(join(func_path, "protocol"), hid.protocol)

@@ -7,6 +7,7 @@
 {
   lib,
   stdenv,
+  python,
   buildPythonApplication,
   fetchFromGitHub,
   makeWrapper,
@@ -90,6 +91,16 @@ buildPythonApplication rec {
 
   nativeBuildInputs = [ makeWrapper ];
 
+  # The keyboard no_out_endpoint fix is a STRUCTURAL edit (an inserted `if`
+  # guard, not a string swap) -- a real tracked .patch file rather than a
+  # substituteInPlace block, specifically to rule out the nix indented-string
+  # dedent gotcha that broke the substituteInPlace version of this same fix
+  # once already (see the patch file's own header for the full incident).
+  # Applied BEFORE postPatch's substituteInPlace edits below (nixpkgs' normal
+  # patch-then-postPatch order); none of those touch this function, so
+  # ordering doesn't matter here, but it's worth knowing which runs first.
+  patches = [ ./0001-keyboard-no-out-endpoint.patch ];
+
   dependencies = [
     pyyaml
     ruamel-yaml
@@ -159,6 +170,17 @@ buildPythonApplication rec {
     # Ship the upstream systemd units / sysusers / tmpfiles for the module to
     # reference (the module itself declares services declaratively).
     find "$out/share/kvmd" -name '.gitignore' -delete
+
+    # Belt-and-suspenders against pythonImportsCheck's blind spot (below):
+    # byte-compile EVERY installed .py file, regardless of whether anything
+    # actually imports it. This is what would have caught 2026-08-24's real
+    # incident directly — a syntax error deep in an unimported submodule
+    # (kvmd/apps/otg/__init__.py) fails the BUILD here instead of shipping.
+    # NOTE: pythonImportsCheck itself does NOT run via installCheckPhase (it
+    # hooks into `preDistPhases`, a separate mechanism entirely) — so this
+    # lives in postInstall, which is guaranteed to run, rather than a
+    # postInstallCheck hook that might not fire in the right place at all.
+    ${python.interpreter} -m compileall -q -f "$out/${python.sitePackages}/kvmd"
   '';
 
   # Fix #!/bin/bash etc. in the shipped scripts.
@@ -230,36 +252,31 @@ buildPythonApplication rec {
         '"/usr/share/kvmd/configs.default/kvmd/edid"' \
         "\"$out/share/kvmd/configs.default/kvmd/edid\"" \
       --replace-fail '"/usr/bin/v4l2-ctl"' '"${lib.getExe' v4l-utils "v4l2-ctl"}"'
-
-    # kvmd-otg's __add_hid() writes no_out_endpoint=1 UNCONDITIONALLY for every
-    # HID gadget function (keyboard, mouse, mouse_alt alike). That's correct
-    # for mouse — its report descriptor has no OUTPUT items, so "no OUT
-    # endpoint" is consistent with what it advertises. It's WRONG for the
-    # keyboard function: its own descriptor (kvmd/apps/otg/hid/keyboard.py)
-    # explicitly declares an OUTPUT report (the LED-state feedback — Num/Caps/
-    # Scroll Lock), so the function ends up promising host→device output
-    # capability it's simultaneously configured with no endpoint to carry.
-    # iOS's HID parser is strict enough to reject the whole interface over
-    # this mismatch: writes to /dev/kvmd-hid-keyboard succeed at the syscall
-    # level (the kernel driver accepts them into its buffer regardless), but
-    # nothing ever reaches the host — HTTP 200 all the way up kvmd's own
-    # stack, zero visible keystrokes. Confirmed end-to-end on pikvm01
-    # (georgs-mac-mini's iPad node), 2026-08-23/24: clearing no_out_endpoint
-    # for hid.usb0 ONLY (mouse's hid.usb1 untouched) fixed keyboard
-    # immediately — real text landed, a genuine iOS Spotlight
-    # search-suggestions dropdown rendered from it — with mouse re-confirmed
-    # unaffected in the same frame. protocol==1 is kvmd's own Keyboard
-    # protocol constant (kvmd/apps/otg/hid/keyboard.py) — a source-grounded
-    # discriminator, not a guess: PiKVM's mouse functions use protocol 0
-    # (absolute) or 2 (relative), never 1, so this cannot misfire on mouse.
-    substituteInPlace kvmd/apps/otg/__init__.py \
-      --replace-fail \
-        '_write(join(func_path, "no_out_endpoint"), "1", optional=True)' \
-        'if hid.protocol != 1:  # Keyboard declares an OUTPUT report (LEDs); needs the OUT endpoint.
-                _write(join(func_path, "no_out_endpoint"), "1", optional=True)'
   '';
 
-  pythonImportsCheck = [ "kvmd" ];
+  # Widened from just ["kvmd"] (which only ever imports the top package,
+  # never touching a submodule unless something in ITS OWN import chain
+  # reaches it — the exact blind spot that let a real Python IndentationError
+  # in kvmd/apps/otg/__init__.py ship silently past `nix build` and take down
+  # live HID on pikvm01 for several minutes, 2026-08-24). Now covers all 8 of
+  # kvmd's top-level submodule packages, so a syntax/import error anywhere
+  # under any of them fails the build. NOTE: importing "kvmd.apps" still
+  # doesn't recursively import kvmd.apps.otg unless apps/__init__.py itself
+  # does — this catches import-EXECUTION errors (missing deps, circular
+  # imports) in each submodule's own __init__.py, complementary to the
+  # compileall gate in postInstall above, which is what actually catches a
+  # syntax error anywhere in the tree regardless of the import graph.
+  pythonImportsCheck = [
+    "kvmd"
+    "kvmd.apps"
+    "kvmd.clients"
+    "kvmd.helpers"
+    "kvmd.keyboard"
+    "kvmd.nbd"
+    "kvmd.plugins"
+    "kvmd.validators"
+    "kvmd.yamlconf"
+  ];
 
   # The eng+osd tesseract kvmd links + reads tessdata from; the NixOS module
   # points ocr.tessdata at ${kvmd.tesseract}/share/tessdata (same store path).

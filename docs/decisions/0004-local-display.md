@@ -9,11 +9,12 @@ there's no conflict to reconcile.
 ## Context
 
 `services.pikvm.localDisplay` shipped 2026-08-24 with **zero automated test
-coverage** — every fact about it (DV-timings lock, 1080p30, the DeviceAllow→
-DevicePolicy=closed crash-loop) was measured by hand on real appliance silicon
-(it-03400). That crash-loop is the concrete motivating incident: setting
-`DeviceAllow` at all flips systemd's `DevicePolicy` to `closed`
-(deny-by-default) for the *whole unit*, which silently revoked the unit's own
+coverage** — every fact about it (DV-timings lock, 1080p30, the DeviceAllow
+crash-loop) was measured by hand on real appliance silicon (it-03400). That
+crash-loop is the concrete motivating incident: setting `DeviceAllow` at all
+narrows systemd's *effective* device access for the whole unit to deny-by-
+default (`DevicePolicy` itself keeps reporting its unset default, `auto` —
+see the correction note below), which silently revoked the unit's own
 implicit access to its `TTYPath=/dev/tty2` + `StandardInput=tty-force` — a
 `Permission denied` crash-loop that has nothing to do with GPU presence. A NixOS
 VM has no real DRM hardware, but this bug is a **systemd cgroup decision**, not
@@ -88,23 +89,41 @@ Two kinds of gate, deliberately kept separate:
    contains the derived getty unit, and `TTYPath` agrees with it. Fails eval
    instantly, same idiom as `flake.nix`'s `host-eval`.
 
-   **Deliberately NOT checked here:** `DevicePolicy = "closed"`. That's
-   systemd's own *implicit* runtime default once `DeviceAllow` is set at all
-   (`man systemd.exec`) — we never write it into the nix config, so it isn't a
-   nix-eval-visible fact. Asserting it in nix would be asserting something the
-   evaluator can't actually see. It's checked for real in the VM instead
-   (`systemctl show … -p DevicePolicy`).
+   **Deliberately NOT checked here:** `DevicePolicy`. Not a nix-eval-visible
+   fact regardless (we never write it into the config, so there'd be nothing
+   to assert on) — but see the correction below, it isn't a meaningful runtime
+   fact either.
 
 2. **VM, behavioural**: the stub `mpv` + fake `sysfsDrmRoot` let the real
    supervisor run against a fake DRM tree that starts with `HDMI-A-2`
    connected. Asserts, in order: the unit survives ~20s with `NRestarts==0` and
    no `"Permission denied"` in its journal (the actual crash-loop
-   reproduction); `DevicePolicy` reads `closed` at runtime; the stub's captured
-   argv contains `--drm-connector=HDMI-A-2` and the load-bearing
-   `--demuxer-lavf-o=input_format=mjpeg` hint; then the fake cable moves
-   (`HDMI-A-2` disconnects, `HDMI-A-1` connects) and, in `auto` mode, the
-   supervisor re-renders onto `HDMI-A-1` within its poll cadence, with the
-   restart count still `0` afterward.
+   reproduction); `DeviceAllow` reads non-empty at runtime (`systemctl show`);
+   the stub's captured argv contains `--drm-connector=HDMI-A-2` and the
+   load-bearing `--demuxer-lavf-o=input_format=mjpeg` hint; then the fake
+   cable moves (`HDMI-A-2` disconnects, `HDMI-A-1` connects) and, in `auto`
+   mode, the supervisor re-renders onto `HDMI-A-1` within its poll cadence,
+   with the restart count still `0` afterward.
+
+   **Correction (2026-08-25, nixos-developer-system, on the first real VM run
+   of this test):** the original version of gate 2 asserted `DevicePolicy ==
+   "closed"` at runtime, on the same "DeviceAllow flips DevicePolicy to
+   closed" assumption as this ADR's Context section originally stated. Both
+   were wrong: per `man systemd.resource-control`, `DevicePolicy=auto` (the
+   default, never overridden here) narrows its *effective* permissiveness
+   once `DeviceAllow` is non-empty, but its *reported setting value* stays
+   `"auto"` — it never flips to literally read `"closed"` unless a unit sets
+   that explicitly. `systemctl show -p DevicePolicy` on this unit reports
+   `"auto"` even while the restriction is genuinely live, confirmed
+   empirically (the assertion failed on a real run while the crash-loop-
+   absence check right above it passed). The test now asserts `DeviceAllow`
+   is non-empty instead — the fact that's actually configured and
+   meaningful. Full writeup: `docs/learnings/systemd-devicepolicy-auto.md`.
+   Same run also caught a second, unrelated gap: this ADR's fixture paths
+   (fake DRM status, the stub's argv-capture file) were originally under
+   `/tmp`, invisible to the real unit's `PrivateTmp=true` sandboxing —
+   relocated to `/run`. See
+   `docs/learnings/systemd-privatetmp-isolation.md`.
 
 **What this does NOT prove**: a VM can't demonstrate a picture actually
 renders — there's no real DRM/GPU in it. That's not the bug that shipped,
@@ -118,7 +137,7 @@ tracked separately per the module's own header, unaffected by this ADR).
 ## Consequences
 
 - Any future edit to `modules/local-display.nix` that reintroduces the
-  DeviceAllow/DevicePolicy crash gets caught by CI (`checks.<system>.
+  DeviceAllow crash-loop gets caught by CI (`checks.<system>.
   local-display`) before it ever reaches an appliance again — the exact
   regression class this ADR closes.
 - `sysfsDrmRoot` being `internal = true` means it won't show up in generated

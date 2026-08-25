@@ -1,9 +1,9 @@
 # `systemctl show -p DevicePolicy` never reports "closed" just because `DeviceAllow` is set
 
-Related: [[nix-drvpath-string-context]] — same class of gotcha (folk wisdom
-about a tool's defaults vs. what it actually does), caught the same way (a
-real run surfacing the discrepancy, then checking the primary source instead
-of trusting the doc comment).
+Related: [[nix-drvpath-string-context]], [[systemd-privatetmp-isolation]] —
+same class of gotcha (folk wisdom about a tool's defaults vs. what it
+actually does), caught the same way (a real run surfacing the discrepancy,
+then checking the primary source instead of trusting the doc comment).
 
 ## The trap
 

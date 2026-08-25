@@ -65,9 +65,18 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     let
       # Captures argv instead of touching real DRM — the WHOLE supervisor
       # (bash control flow, connector polling, re-exec on change) still runs
-      # for real; only the player binary is fake.
+      # for real; only the player binary is fake. /run, NOT /tmp: the real
+      # unit sets PrivateTmp=true, which gives it an isolated, initially-empty
+      # private /tmp — content this test writes under the HOST's /tmp (via
+      # tmpfiles.rules below, or a bare `cat`/`echo` from the test script) is
+      # invisible to the unit under test, and vice versa. /run isn't touched
+      # by PrivateTmp, so it's actually shared. See
+      # docs/learnings/systemd-privatetmp-isolation.md (confirmed empirically:
+      # a first pass at this test using /tmp for both the fake DRM tree and
+      # this argv capture hung forever — the supervisor never saw the fixture
+      # files, and this file would never have appeared either).
       stubMpv = pkgs.writeShellScriptBin "mpv" ''
-        printf '%s\n' "$@" > /tmp/argv
+        printf '%s\n' "$@" > /run/argv
         sleep infinity
       '';
     in
@@ -94,16 +103,17 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
         enable = true;
         mode = "auto";
         package = stubMpv;
-        sysfsDrmRoot = "/tmp/fake-drm";
+        sysfsDrmRoot = "/run/fake-drm";
       };
 
       # Fake DRM connector tree, root matching sysfsDrmRoot above. Starts with
-      # HDMI-A-2 connected, HDMI-A-1 disconnected.
+      # HDMI-A-2 connected, HDMI-A-1 disconnected. /run, not /tmp — see the
+      # stubMpv comment above.
       systemd.tmpfiles.rules = [
-        "d /tmp/fake-drm/card0-HDMI-A-1 0755 root root -"
-        "d /tmp/fake-drm/card0-HDMI-A-2 0755 root root -"
-        "f /tmp/fake-drm/card0-HDMI-A-1/status 0644 root root - disconnected"
-        "f /tmp/fake-drm/card0-HDMI-A-2/status 0644 root root - connected"
+        "d /run/fake-drm/card0-HDMI-A-1 0755 root root -"
+        "d /run/fake-drm/card0-HDMI-A-2 0755 root root -"
+        "f /run/fake-drm/card0-HDMI-A-1/status 0644 root root - disconnected"
+        "f /run/fake-drm/card0-HDMI-A-2/status 0644 root root - connected"
       ];
 
       virtualisation.memorySize = 2048;
@@ -139,16 +149,16 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
 
     # (2c) the stub captured the right argv: rendering on the connected fake
     # connector (HDMI-A-2), with the load-bearing mjpeg demuxer hint.
-    machine.wait_for_file("/tmp/argv")
-    argv = machine.succeed("cat /tmp/argv")
+    machine.wait_for_file("/run/argv")
+    argv = machine.succeed("cat /run/argv")
     assert "--drm-connector=HDMI-A-2" in argv, argv
     assert "--demuxer-lavf-o=input_format=mjpeg" in argv, argv
 
     # (2d) move the cable: HDMI-A-2 disconnects, HDMI-A-1 connects. auto mode
     # should re-render onto HDMI-A-1 within its ~2s poll cadence.
-    machine.succeed("echo disconnected > /tmp/fake-drm/card0-HDMI-A-2/status")
-    machine.succeed("echo connected > /tmp/fake-drm/card0-HDMI-A-1/status")
-    machine.wait_until_succeeds("grep -q -- '--drm-connector=HDMI-A-1' /tmp/argv", timeout=30)
+    machine.succeed("echo disconnected > /run/fake-drm/card0-HDMI-A-2/status")
+    machine.succeed("echo connected > /run/fake-drm/card0-HDMI-A-1/status")
+    machine.wait_until_succeeds("grep -q -- '--drm-connector=HDMI-A-1' /run/argv", timeout=30)
 
     # still no crash after the re-render.
     nrestarts_after = machine.succeed(

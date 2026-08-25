@@ -8,11 +8,7 @@
 #       getty unit, TTYPath agrees with it — directly off the already-built
 #       it-03400 host config (which has localDisplay.enable = true, the
 #       coordination point from Phase 3). Fails eval instantly if violated,
-#       same idiom as flake.nix's host-eval. NOTE: "DevicePolicy=closed" is
-#       NOT checked here — it's systemd's own IMPLICIT runtime default once
-#       DeviceAllow is set at all (see `man systemd.exec`), never written into
-#       our nix config, so it isn't a nix-eval-visible fact; it's checked for
-#       real in the VM below instead.
+#       same idiom as flake.nix's host-eval.
 #
 #   (2) VM, behavioural: stub `mpv` to capture its argv instead of touching
 #       real DRM, point `sysfsDrmRoot` at fake connector/status files instead
@@ -20,10 +16,21 @@
 #       -> pick_target -> exec) run for real. Assert:
 #         (a) the unit survives — NRestarts==0 and no "Permission denied" in
 #             its journal after ~20s. This is what actually reproduces the
-#             DeviceAllow->DevicePolicy=closed crash-loop it-03400 found on a
-#             real deploy (the denial is a systemd cgroup decision independent
-#             of GPU presence, so a VM without real DRM still exercises it);
-#         (b) DevicePolicy is genuinely "closed" at runtime (systemctl show);
+#             DeviceAllow-driven crash-loop it-03400 found on a real deploy
+#             (the denial is a systemd cgroup decision independent of GPU
+#             presence, so a VM without real DRM still exercises it);
+#         (b) DeviceAllow is genuinely non-empty at runtime (systemctl show)
+#             — the config-level fact that narrows this unit's access (see
+#             `man systemd.resource-control`'s DevicePolicy=auto: "in addition,
+#             allows access to all devices IF NO EXPLICIT DeviceAllow= IS
+#             PRESENT" — DevicePolicy itself is NEVER reported as "closed"
+#             unless a unit sets it explicitly, which ours doesn't; auto's
+#             *effective* permissiveness narrows once DeviceAllow is
+#             non-empty, but `systemctl show -p DevicePolicy` keeps reporting
+#             "auto" regardless — confirmed empirically: a real VM run of
+#             this test asserting DevicePolicy=="closed" failed with "auto"
+#             even though (a) above proves the restriction IS live. See
+#             docs/learnings/systemd-devicepolicy-auto.md);
 #         (c) the stub's captured argv has the right --drm-connector and the
 #             --demuxer-lavf-o=input_format=mjpeg hint;
 #         (d) removing the rendered connector and connecting a different one
@@ -120,13 +127,15 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     journal = machine.succeed("journalctl -u pikvm-local-display.service --no-pager")
     assert "permission denied" not in journal.lower(), journal
 
-    # (2b) DevicePolicy is genuinely "closed" at runtime (systemd's own implicit
-    # default once DeviceAllow is set at all — not a nix-eval-visible fact, see
-    # the file header).
-    policy = machine.succeed(
-        "systemctl show pikvm-local-display.service -p DevicePolicy --value"
+    # (2b) DeviceAllow is genuinely non-empty at runtime — not a nix-eval-
+    # visible fact by itself (systemctl's runtime rendering could in
+    # principle differ from what nix wrote), see the file header for why this
+    # is checked instead of DevicePolicy (which never reports "closed" here —
+    # confirmed empirically, not just from the man page).
+    device_allow = machine.succeed(
+        "systemctl show pikvm-local-display.service -p DeviceAllow --value"
     ).strip()
-    assert policy == "closed", policy
+    assert device_allow != "", "DeviceAllow is empty at runtime — the unit has no device restriction at all"
 
     # (2c) the stub captured the right argv: rendering on the connected fake
     # connector (HDMI-A-2), with the load-bearing mjpeg demuxer hint.

@@ -147,10 +147,14 @@ let
       + builtins.readFile ./local-display-run.sh;
   };
 
-  # Setting DeviceAllow AT ALL flips systemd's DevicePolicy to "closed"
-  # (deny-by-default) for the whole unit — it doesn't just ADD an allowance,
-  # it also revokes the implicit access every process normally has to its own
-  # controlling TTY. Without "char-tty rw" here, this unit's own
+  # Setting DeviceAllow AT ALL narrows systemd's default DevicePolicy=auto to
+  # deny-by-default for the whole unit (man systemd.resource-control: auto
+  # "allows access to all devices IF NO EXPLICIT DeviceAllow= IS PRESENT" —
+  # the reported DevicePolicy VALUE stays "auto", only its effective
+  # permissiveness narrows; see docs/learnings/systemd-devicepolicy-auto.md).
+  # It doesn't just ADD an allowance, it also revokes the implicit access
+  # every process normally has to its own controlling TTY. Without
+  # "char-tty rw" here, this unit's own
   # TTYPath=/dev/tty<vt> + StandardInput=tty-force below is silently denied by
   # the SAME sandboxing that's supposed to scope down DRM/capture access,
   # crash-looping on "Permission denied" (exit 208/STDIN). HW-confirmed on a
@@ -319,9 +323,10 @@ in
         assertion = lib.elem "char-tty rw" deviceAllow;
         message = ''
           pikvm-local-display: DeviceAllow must always include "char-tty rw" —
-          dropping it flips DevicePolicy=closed and denies this unit's own
-          TTYPath/StandardInput=tty-force, crash-looping with Permission
-          denied (HW-confirmed regression, it-03400 2026-08-24).
+          dropping it (while "char-drm rw" still narrows DevicePolicy=auto's
+          effective access) denies this unit's own TTYPath/
+          StandardInput=tty-force, crash-looping with Permission denied
+          (HW-confirmed regression, it-03400 2026-08-24).
         '';
       }
     ];

@@ -34,8 +34,6 @@ in
       ../modules/kvmd.nix
       ../modules/otg.nix
       ../modules/runtime-paths.nix
-      ../modules/deployment.nix # healthyStates' own default reads this (Phase 4)
-      ../modules/system/auto-upgrade.nix # deployment.nix's config unconditionally targets this option
       ../modules/mcp-integration.nix
       ../modules/hid-recovery.nix
       ../modules/hid-recovery-endpoint.nix

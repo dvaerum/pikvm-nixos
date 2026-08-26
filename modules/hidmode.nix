@@ -111,6 +111,13 @@ let
 in
 {
   imports = [
+    # Self-sufficiency: hidMode.default's own default reads
+    # config.services.pikvm.deployment.target.kind (Phase 4) — import the
+    # module that declares it rather than relying on every consumer to have
+    # already imported it ahead of us (the class of bug round2-phase2's
+    # module-self-sufficiency check exists to catch).
+    ./deployment.nix
+
     # Retire the old build-time toggle LOUDLY — an existing config must fail at
     # eval with a pointer, never evaluate clean while quietly losing the setting.
     # This matters extra here: ipadCompat also patched kvmd/apps/otg/hid/mouse.py,

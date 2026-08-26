@@ -25,6 +25,15 @@ let
   cfg = config.services.pikvm.deployment;
 in
 {
+  # Self-sufficiency: this module's own config unconditionally targets
+  # services.pikvm.autoUpgrade.flake (below) regardless of its mkIf's
+  # condition value — NixOS type-checks a defined option path against the
+  # declared option tree independently of which branch wins, so that option
+  # must exist wherever THIS module is imported. Import the module that
+  # declares it rather than relying on every consumer to have already done
+  # so ahead of us.
+  imports = [ ./system/auto-upgrade.nix ];
+
   options.services.pikvm.deployment = {
     target = {
       kind = lib.mkOption {

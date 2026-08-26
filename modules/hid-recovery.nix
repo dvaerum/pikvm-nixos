@@ -24,6 +24,8 @@
 let
   cfg = config.services.pikvm.hidRecovery;
 
+  mkUnitPrefixGrant = import ./lib/unit-prefix-grant.nix { inherit lib; };
+
   recover = pkgs.writeShellApplication {
     name = "pikvm-hid-recover";
     runtimeInputs = [
@@ -64,60 +66,38 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    # This module GRANTS privilege to triggerUser (the polkit rule below) but
-    # doesn't CREATE that user itself — the endpoint module owns that (see
-    # triggerUser's description). If triggerUser is overridden without a
-    # matching endpoint (or the endpoint module isn't imported at all), the
-    # polkit rule silently references a nonexistent user — `systemctl start`
-    # from that user only ever fails at runtime with a confusing polkit
-    # denial, never at eval. Catch it here instead.
-    assertions = [
-      {
-        assertion = config.users.users ? ${cfg.triggerUser};
-        message = ''
-          services.pikvm.hidRecovery.triggerUser = "${cfg.triggerUser}" is not a
-          declared system user. This module only GRANTS it polkit privilege —
-          services.pikvm.hidRecovery.endpoint (or an equivalent module) must
-          actually create it. Enable that endpoint, or create the user
-          yourself if you're wiring up a different trigger.
-        '';
-      }
-    ];
-
-    # Templated root oneshot: one privileged recovery action per instance. The
-    # instance (%i) is the action string, passed straight to the executor.
-    systemd.services."pikvm-hid-recover@" = {
-      description = "PiKVM HID recovery: %i";
-      serviceConfig = {
-        Type = "oneshot";
-        # %i is soft_connect | udc-rebind | reboot — validated by the executor.
-        ExecStart = "${cfg.package}/bin/pikvm-hid-recover %i";
-        # Runs as root: writes /sys/class/udc/*/soft_connect and the gadget's
-        # configfs UDC link, and (reboot) signals PID1. Intentionally NOT
-        # hardened with ProtectKernelTunables/ProtectControlGroups — those make
-        # /sys read-only and would break the soft_connect / UDC-bind writes.
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    (mkUnitPrefixGrant {
+      feature = "PiKVM HID-recovery";
+      comment = ''
+        // PiKVM HID-recovery: allow the loopback recovery endpoint's user to
+        // start (only) the recovery action units.'';
+      unitPrefix = "pikvm-hid-recover@";
+      triggerUser = cfg.triggerUser;
+      # This module GRANTS privilege to triggerUser but doesn't CREATE that
+      # user itself — the endpoint module owns that (see triggerUser's
+      # description). If triggerUser is overridden without a matching
+      # endpoint (or the endpoint module isn't imported at all), the polkit
+      # rule would silently reference a nonexistent user — `systemctl start`
+      # from that user only ever fails at runtime with a confusing polkit
+      # denial, never at eval. Catch it here instead.
+      triggerUserDeclared = config.users.users ? ${cfg.triggerUser};
+    })
+    {
+      # Templated root oneshot: one privileged recovery action per instance.
+      # The instance (%i) is the action string, passed straight to the executor.
+      systemd.services."pikvm-hid-recover@" = {
+        description = "PiKVM HID recovery: %i";
+        serviceConfig = {
+          Type = "oneshot";
+          # %i is soft_connect | udc-rebind | reboot — validated by the executor.
+          ExecStart = "${cfg.package}/bin/pikvm-hid-recover %i";
+          # Runs as root: writes /sys/class/udc/*/soft_connect and the gadget's
+          # configfs UDC link, and (reboot) signals PID1. Intentionally NOT
+          # hardened with ProtectKernelTunables/ProtectControlGroups — those make
+          # /sys read-only and would break the soft_connect / UDC-bind writes.
+        };
       };
-    };
-
-    # Least-privilege trigger: only `triggerUser` may `start` only the
-    # pikvm-hid-recover@ units. No sudo, no setuid, nothing else reachable.
-    # polkit must actually be running for the rule (and thus a non-root
-    # `systemctl start`) to work — it's off by default on a headless appliance.
-    security.polkit.enable = true;
-    security.polkit.extraConfig = ''
-      // PiKVM HID-recovery: allow the loopback recovery endpoint's user to
-      // start (only) the recovery action units.
-      polkit.addRule(function(action, subject) {
-        if (action.id == "org.freedesktop.systemd1.manage-units" &&
-            action.lookup("verb") == "start" &&
-            subject.user == "${cfg.triggerUser}") {
-          var unit = action.lookup("unit");
-          if (unit && unit.indexOf("pikvm-hid-recover@") == 0) {
-            return polkit.Result.YES;
-          }
-        }
-      });
-    '';
-  };
+    }
+  ]);
 }

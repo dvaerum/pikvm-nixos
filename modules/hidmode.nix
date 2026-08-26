@@ -31,6 +31,8 @@ let
   # hidmode-endpoint.nix before, silently driftable.
   overridePath = config.services.pikvm.runtimePaths.hidmodeOverride.path;
 
+  mkUnitPrefixGrant = import ./lib/unit-prefix-grant.nix { inherit lib; };
+
   # The canonical per-mode override documents, in kvmd's override.d YAML shape
   # (YAML is a superset of JSON, so toJSON is a valid override). BOTH modes are
   # explicit on the topology keys so the mode is authoritative regardless of the
@@ -161,7 +163,17 @@ in
     };
   };
 
-  config = lib.mkIf (kvmdCfg.enable && cfg.enable) {
+  config = lib.mkMerge [
+    (lib.mkIf cfg.endpoint.enable (mkUnitPrefixGrant {
+      feature = "PiKVM HID-mode";
+      comment = ''
+        // PiKVM HID-mode: allow the loopback endpoint's user to start (only) the
+        // mode-switch units.'';
+      unitPrefix = "pikvm-hidmode@";
+      triggerUser = cfg.triggerUser;
+      triggerUserDeclared = config.users.users ? ${cfg.triggerUser};
+    }))
+    (lib.mkIf (kvmdCfg.enable && cfg.enable) {
     # Seed the mutable override ONCE (C, not C+ → never clobbered on redeploy).
     # /var/lib/kvmd itself is created by the kvmd module. This single file is the
     # source of the mode (#53); pikvm-hidmode rewrites it atomically.
@@ -204,25 +216,6 @@ in
     # On-box debug CLI: `pikvm-hidmode {get|set <mode>}` (set needs root).
     environment.systemPackages = [ hidmodeExec ];
 
-    # Least-privilege trigger: only triggerUser may `start` only the
-    # pikvm-hidmode@ units. No sudo, no setuid. (polkit is enabled here; it's off
-    # by default on a headless appliance, and hid-recovery also turns it on.)
-    security.polkit.enable = true;
-    security.polkit.extraConfig = ''
-      // PiKVM HID-mode: allow the loopback endpoint's user to start (only) the
-      // mode-switch units.
-      polkit.addRule(function(action, subject) {
-        if (action.id == "org.freedesktop.systemd1.manage-units" &&
-            action.lookup("verb") == "start" &&
-            subject.user == "${cfg.triggerUser}") {
-          var unit = action.lookup("unit");
-          if (unit && unit.indexOf("pikvm-hidmode@") == 0) {
-            return polkit.Result.YES;
-          }
-        }
-      });
-    '';
-
     # 90-hidmode (read last) WINS over the user's settings (10). Warn loudly at
     # eval if `settings` sets a key hidMode owns, so a stray value that hidMode
     # silently overrides becomes a readable message instead of a confusing no-op.
@@ -235,5 +228,6 @@ in
       ++ lib.optional mcpTargetDisagrees ''
         services.pikvm-mcp.target = "${mcpTarget}" disagrees with services.pikvm.kvmd.hidMode.default = "${cfg.default}". The appliance owns the HID mode (single source of truth); a static MCP target can drift from it — and after the runtime switch lands, they can disagree at runtime, which is worse. Make them match, or (the real fix, tracked as a #51 follow-up) let the MCP derive its target from the appliance's GET /hidmode instead of declaring it.
       '';
-  };
+    })
+  ];
 }

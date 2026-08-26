@@ -58,4 +58,19 @@
   # wins, so pikvm01 tracks the ipad-default configuration on its weekly
   # auto-upgrade (deployment.nix feeds this through to autoUpgrade.flake).
   services.pikvm.deployment.updateRef = "#pikvm01";
+
+  # Keep ustreamer running permanently instead of kvmd's default on-demand
+  # idle-stop (~10s after the last video client disconnects, ~3% CPU saved).
+  # This box's video feed is polled repeatedly by short-lived MCP clients
+  # (screenshots between iPad-rig test runs), so the idle-stop/cold-start
+  # cycle costs reconnect latency + occasional flakiness on every poll — the
+  # exact tradeoff kvmd's own `streamer.forever` option exists for. This was
+  # set by hand in pikvm01's old stock-Arch override.yaml (documented in
+  # pikvm_mcp_server's docs/troubleshooting/pikvm-server-changes.md, applied
+  # 2026-04-26) and silently lost in the 2026-08-23 SD-swap to pikvm-nixos —
+  # restoring it declaratively here via the generic settings escape hatch
+  # (modules/kvmd.nix's `services.pikvm.kvmd.settings`, same mechanism as
+  # desired_fps/atx.type/msd.type elsewhere) means it survives every future
+  # re-image instead of depending on a manual edit that can go missing again.
+  services.pikvm.kvmd.settings.kvmd.streamer.forever = true;
 }

@@ -16,7 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # determinate: false — vanilla/upstream Nix, not Determinate Nix. CI's
+      # `nix flake check` failed with "path '.../kvmd-4.188.drv' is not
+      # valid" under Determinate Nix (the action's own default as of
+      # 2026-08) while the identical command, same commit, same flags,
+      # passed clean under vanilla Nix locally — isolated by
+      # nixos-developer-system 2026-08-26 (see git log around this commit).
       - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          determinate: false
       - name: flake check (eval only, all systems)
         run: nix flake check --all-systems --no-build
       - name: Instantiate the universal system (catches config/module errors)
@@ -32,8 +40,10 @@ jobs:
       # Register binfmt_misc so the x86 runner can execute aarch64 binaries,
       # letting Nix build aarch64-linux derivations under QEMU.
       - uses: docker/setup-qemu-action@v3
+      # determinate: false — see the eval job's comment on this same flag.
       - uses: DeterminateSystems/nix-installer-action@main
         with:
+          determinate: false
           extra-conf: |
             extra-platforms = aarch64-linux
             extra-substituters = https://nixos-raspberrypi.cachix.org
@@ -69,7 +79,10 @@ jobs:
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      # determinate: false — see the eval job's comment on this same flag.
       - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          determinate: false
       - name: Run the kvmd-services VM test
         run: nix build --print-build-logs .#checks.x86_64-linux.kvmd-services
       # Unified-auth end-to-end (kvmd + nginx front-door + mcp security=kvmd).

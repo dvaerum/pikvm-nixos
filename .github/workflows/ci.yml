@@ -16,15 +16,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # determinate: false — vanilla/upstream Nix, not Determinate Nix. CI's
-      # `nix flake check` failed with "path '.../kvmd-4.188.drv' is not
-      # valid" under Determinate Nix (the action's own default as of
-      # 2026-08) while the identical command, same commit, same flags,
-      # passed clean under vanilla Nix locally — isolated by
-      # nixos-developer-system 2026-08-26 (see git log around this commit).
+      # determinate: false — vanilla/upstream Nix, kept for predictability
+      # (see build-packages/vm-test's copy of this comment).
+      #
+      # allow-import-from-derivation = true — the ACTUAL fix for CI's
+      # `nix flake check` failing with "path '.../kvmd-4.188.drv' is not
+      # valid": pkgs/kvmd-extras/default.nix does `builtins.readDir
+      # "${kvmd}/share/kvmd/extras"`, a genuine Import-From-Derivation — it
+      # needs kvmd's OUTPUT to exist to enumerate that directory, which is
+      # an implicit build regardless of `--no-build` on the check itself. A
+      # fresh nix-installer runner's default nix.conf doesn't allow IFD, so
+      # evaluation hits the not-yet-built (and, under --no-build, never-to-
+      # be-built) kvmd output and fails exactly this way. Confirmed directly
+      # against a real CI run (not theorized): the SAME failure reproduced
+      # under vanilla Nix on this runner (ruling out Determinate Nix as the
+      # true variable — nixos-developer-system's original diagnosis missed
+      # this because their local machine's own nix.conf already allows IFD,
+      # masking it). A local machine that already has kvmd built/cached
+      # never exercises this path either way — only a genuinely fresh store
+      # does, which is exactly what every CI run starts from.
       - uses: DeterminateSystems/nix-installer-action@main
         with:
           determinate: false
+          extra-conf: |
+            allow-import-from-derivation = true
       - name: flake check (eval only, all systems)
         run: nix flake check --all-systems --no-build
       - name: Instantiate the universal system (catches config/module errors)

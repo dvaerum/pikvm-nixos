@@ -22,9 +22,11 @@ updates itself from this repository.
 Two vendor-kernel targets (Raspberry Pi vendor kernel, needed for TC358743 CSI
 capture + hardware H.264), plus a mainline single-image fallback:
 
-| Attribute | Board | Notes |
+| Attribute | Board / role | Notes |
 |---|---|---|
-| `rpi4` | Raspberry Pi 4 | **required target**, vendor kernel |
+| `rpi4` | Raspberry Pi 4 | **required target**, vendor kernel, stock desktop/absolute defaults |
+| `pikvm01` | Raspberry Pi 4 (deployment of `rpi4`) | permanently-cabled iPad kiosk, TEST rig — not production |
+| `it-03400` | Raspberry Pi 4 (deployment of `rpi4`) | intermittently-cabled hardware-verification appliance |
 | `zero2w` | Raspberry Pi Zero 2 W | bonus target, vendor kernel |
 | `universal` | any (Pi 4 + Zero 2 W + CM4) | mainline kernel; single `.img` file, weaker capture |
 
@@ -35,7 +37,7 @@ The simplest path — format **and** install in one command (via
 
 ```sh
 nix run .#install-sd -- --board rpi4 /dev/diskX     # ⚠ erases /dev/diskX
-# or: --board zero2w
+# or: --board pikvm01 | it-03400 | zero2w
 ```
 
 Building the aarch64 system from an x86_64 host works too (cross-build); enable

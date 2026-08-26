@@ -13,6 +13,10 @@
 #
 # Off unless `services.pikvm.kvmd.hidMode.endpoint.enable` (default: on when both
 # the hidMode apparatus and the built-in MCP are enabled).
+#
+# Shared shape (user/group, token oneshot, hardened unit) comes from
+# modules/lib/loopback-endpoint.nix; route logic (do_GET/do_POST) is
+# modules/hidmode-routes.py, readFile'd in unmodified.
 {
   config,
   lib,
@@ -24,23 +28,15 @@ let
   cfg = hidModeCfg.endpoint;
   runtimePaths = config.services.pikvm.runtimePaths;
 
-  # Runtime paths (never in the store): the shared token the endpoint reads, and
-  # an EnvironmentFile that injects it into pikvm-mcp's env. Canonical contract
-  # in modules/runtime-paths.nix (Finding 3, Phase 2) — this was independently
-  # hardcoded here AND in hidmode-web.nix before, silently driftable.
-  tokenPath = runtimePaths.hidmodeToken.path;
-  mcpEnvPath = runtimePaths.hidmodeMcpEnv.path;
+  mkLoopbackEndpoint = import ./lib/loopback-endpoint.nix { inherit lib config pkgs; };
 
-  endpoint = pkgs.writeText "pikvm-hidmode-endpoint.py" ''
-    import hmac, json, os, subprocess
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    PORT = int(os.environ["PORT"])
+  # Module-level constants + helpers the routes fragment needs, inserted
+  # BEFORE the shared handler.py's imports/class (see loopback-endpoint.nix's
+  # `handlerEnv` doc for why the ordering is safe).
+  handlerEnv = ''
     MODES = {"desktop", "ipad"}
     OVERRIDE = "${runtimePaths.hidmodeOverride.path}"
     GADGET = "/sys/kernel/config/usb_gadget/${runtimePaths.otgGadgetName}"
-    with open(os.environ["TOKEN_FILE"], "r") as fh:
-        TOKEN = fh.read().strip()
 
     # kvmd 4.188 mouse report_descriptor sha256s (it-03400 re-derived on 4.188).
     # Mode is classified by descriptor SHA (+ mouse count) per the #51 ruling —
@@ -115,80 +111,6 @@ let
             return "desktop"
         return None  # 0 mice / partial / unexpected => unknown (settling)
 
-    class Handler(BaseHTTPRequestHandler):
-        def _send_json(self, code, obj):
-            body = json.dumps(obj).encode()
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def reply(self, code, ok, message):
-            self._send_json(code, {"ok": ok, "message": message})
-
-        def _authorized(self):
-            auth = self.headers.get("Authorization", "")
-            token = auth[7:] if auth.startswith("Bearer ") else ""
-            return bool(token) and hmac.compare_digest(token, TOKEN)
-
-        def do_GET(self):
-            if self.path.rstrip("/") != "/hidmode":
-                return self.reply(404, False, "not found")
-            if not self._authorized():
-                return self.reply(401, False, "unauthorized")
-            requested = requested_mode()
-            observed = observed_mode()
-            # `mode` is the ASSEMBLED gadget (the ground truth the MCP follows),
-            # NOT the config: null while mid-reassembly/unrecognised so the MCP
-            # fail-closes on its settling gate instead of driving the wrong mode.
-            # `requested` (the boot-authoritative yaml = next-boot mode) + `settled`
-            # ride along: requested != observed after settling = the box runs one
-            # mode now but is primed to boot into the other (a drift signal nothing
-            # detected before — see #53/#44).
-            return self._send_json(200, {
-                "ok": True,
-                "mode": observed,
-                "requested": requested,
-                "observed": observed,
-                "settled": observed is not None,
-            })
-
-        def do_POST(self):
-            if self.path.rstrip("/") != "/hidmode":
-                return self.reply(404, False, "not found")
-            if not self._authorized():
-                return self.reply(401, False, "unauthorized")
-            try:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                payload = json.loads(self.rfile.read(length) or b"{}")
-            except Exception:
-                return self.reply(400, False, "invalid JSON body")
-            mode = payload.get("mode", "")
-            if mode not in MODES:
-                return self.reply(400, False, "unknown mode (want desktop|ipad)")
-            # Skip the switch only if the ASSEMBLED gadget is already this mode —
-            # comparing against observed (not the requested config) so a
-            # config/gadget drift (a prior failed switch) still triggers a
-            # corrective reassembly instead of being no-op'd away.
-            if mode == observed_mode():
-                return self._send_json(200, {"ok": True, "mode": mode, "message": "already in %s (gadget confirms)" % mode})
-            unit = "pikvm-hidmode@%s.service" % mode
-            # --no-block: non-locking. The switch proceeds async (the gadget
-            # re-assembles, USB re-enumerates, kvmd restarts). The client polls
-            # GET /hidmode for the new mode rather than us holding the request.
-            result = subprocess.run(["systemctl", "start", "--no-block", unit])
-            if result.returncode == 0:
-                return self._send_json(200, {
-                    "ok": True, "mode": mode,
-                    "message": "mode switching to %s; USB re-enumerates and the active session drops (~5s)" % mode,
-                })
-            return self.reply(502, False, "switch to %s failed (rc=%d)" % (mode, result.returncode))
-
-        def log_message(self, *args):
-            pass  # don't log tokens/paths
-
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
   '';
 in
 {
@@ -234,81 +156,19 @@ in
           message = "services.pikvm.kvmd.hidMode.endpoint.enable requires services.pikvm.kvmd.hidMode.enable (the endpoint triggers the pikvm-hidmode@ units it provides).";
         }
       ];
-
-      # The endpoint's dedicated user = hidMode.triggerUser (the polkit rule in
-      # hidmode.nix grants THIS user start-only on the pikvm-hidmode@ units).
-      users.users.${hidModeCfg.triggerUser} = {
-        isSystemUser = true;
-        group = hidModeCfg.triggerUser;
-        description = "PiKVM HID-mode loopback endpoint";
-      };
-      users.groups.${hidModeCfg.triggerUser} = { };
-
-      # Provision the shared token (unless supplied) + the pikvm-mcp env file.
-      systemd.services.pikvm-hidmode-token = {
-        description = "Provision the PiKVM HID-mode bearer token";
-        wantedBy = [ "multi-user.target" ];
-        before = [
-          "pikvm-hidmode-endpoint.service"
-          "pikvm-mcp.service"
-        ];
-        serviceConfig = {
-          Type = "oneshot";
-          RemainAfterExit = true;
-        };
-        path = [ pkgs.coreutils ];
-        script = ''
-          mkdir -p ${builtins.dirOf tokenPath}
-          ${
-            if cfg.tokenFile != null then
-              ''install -m0640 -g ${hidModeCfg.triggerUser} ${cfg.tokenFile} ${tokenPath}''
-            else
-              ''
-                if [ ! -s ${tokenPath} ]; then
-                  ( umask 027; head -c 32 /dev/urandom | base64 | tr -d '\n' > ${tokenPath} )
-                  chgrp ${hidModeCfg.triggerUser} ${tokenPath}
-                  chmod 0640 ${tokenPath}
-                fi
-              ''
-          }
-          ( umask 077; printf 'PIKVM_HIDMODE_TOKEN=%s\n' "$(cat ${tokenPath})" > ${mcpEnvPath} )
-        '';
-      };
-
-      systemd.services.pikvm-hidmode-endpoint = {
-        description = "PiKVM HID-mode loopback endpoint";
-        wantedBy = [ "multi-user.target" ];
-        after = [
-          "pikvm-hidmode-token.service"
-          "network.target"
-        ];
-        requires = [ "pikvm-hidmode-token.service" ];
-        path = [ pkgs.systemd ]; # systemctl
-        serviceConfig = {
-          User = hidModeCfg.triggerUser;
-          Group = hidModeCfg.triggerUser;
-          Environment = [
-            "PORT=${toString cfg.port}"
-            "TOKEN_FILE=${tokenPath}"
-          ];
-          ExecStart = "${pkgs.python3}/bin/python3 ${endpoint}";
-          Restart = "on-failure";
-          RestartSec = 5;
-          NoNewPrivileges = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-          PrivateTmp = true;
-          RestrictAddressFamilies = [
-            "AF_INET"
-            "AF_UNIX"
-          ];
-          RestrictNamespaces = true;
-          LockPersonality = true;
-        };
-      };
-
-      networking.firewall = { }; # loopback only; nothing to open
     }
+    (mkLoopbackEndpoint {
+      description = "PiKVM HID-mode";
+      name = "hidmode";
+      user = hidModeCfg.triggerUser;
+      port = cfg.port;
+      tokenFile = cfg.tokenFile;
+      tokenChannel = runtimePaths.hidmodeToken;
+      mcpEnvChannel = runtimePaths.hidmodeMcpEnv;
+      mcpEnvVar = "PIKVM_HIDMODE_TOKEN";
+      handler = builtins.readFile ./hidmode-routes.py;
+      inherit handlerEnv;
+    })
     # Point the MCP server at us — via the always-declared write-side proxies
     # in mcp-integration.nix (services.pikvm.mcp.hidModeUrl/.forceTargetNull),
     # never services.pikvm-mcp.* directly: that option path only exists when
@@ -327,17 +187,6 @@ in
       # Single source: hidModeUrl set here ⟺ target null here.
       services.pikvm.mcp.hidModeUrl = "http://127.0.0.1:${toString cfg.port}/hidmode";
       services.pikvm.mcp.forceTargetNull = true;
-
-      systemd.services.pikvm-mcp = {
-        after = [ "pikvm-hidmode-token.service" ];
-        wants = [ "pikvm-hidmode-token.service" ];
-        # LIST form (not a bare string): systemd unitOptions concatenate list
-        # definitions across modules, so this coexists with the hid-recovery
-        # endpoint's own EnvironmentFile on pikvm-mcp. A bare string collides
-        # (both are single-valued defs of the same option) — the appliance
-        # enables BOTH endpoints, so a string here fails eval on the real host.
-        serviceConfig.EnvironmentFile = [ mcpEnvPath ];
-      };
     })
   ]);
 }

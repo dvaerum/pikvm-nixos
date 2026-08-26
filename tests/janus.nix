@@ -15,9 +15,10 @@
 
   nodes.machine = {
     imports = [
-      ../modules/kvmd.nix
-      ../modules/otg.nix
-      ../modules/mcp-integration.nix
+      # nginx.nix transitively imports kvmd.nix (→ otg.nix) and
+      # mcp-integration.nix — see module-list.nix / Round-2 Phase 2 for why
+      # each module now imports its own declarers. janus.nix is a leaf
+      # (nothing else imports it), so it still needs listing explicitly.
       ../modules/nginx.nix
       ../modules/janus.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off)

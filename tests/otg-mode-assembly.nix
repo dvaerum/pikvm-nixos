@@ -51,8 +51,9 @@ in
     { ... }:
     {
       imports = [
+        # kvmd.nix transitively imports otg.nix — see module-list.nix /
+        # Round-2 Phase 2 for why each module now imports its own declarers.
         ../modules/kvmd.nix
-        ../modules/otg.nix
       ];
 
       services.pikvm.kvmd.enable = true;

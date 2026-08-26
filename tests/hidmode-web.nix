@@ -19,13 +19,12 @@
 
   nodes.machine = {
     imports = [
-      ../modules/kvmd.nix
-      ../modules/otg.nix
-      ../modules/runtime-paths.nix
-      ../modules/mcp-integration.nix
-      ../modules/nginx.nix # imports webterm.nix + hidmode-web.nix
-      ../modules/hidmode.nix
-      ../modules/hidmode-endpoint.nix
+      # nginx.nix transitively imports hidmode-web.nix (→ hidmode-endpoint.nix
+      # → hidmode.nix → kvmd.nix → otg.nix), webterm.nix, mcp-integration.nix,
+      # and kvmd.nix again — see module-list.nix / Round-2 Phase 2 for why
+      # each module now imports its own declarers, which is what makes this
+      # list this short.
+      ../modules/nginx.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)
     ];
 

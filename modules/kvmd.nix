@@ -311,6 +311,11 @@ let
     + "--override-dir /etc/kvmd/override.d";
 in
 {
+  # otg.nix: this module reads config.services.pikvm.otg.enable (below) — see
+  # module-list.nix / Round-2 Phase 2 for why every module now imports its own
+  # declarers directly instead of relying on the aggregate to supply them.
+  imports = [ ./otg.nix ];
+
   options.services.pikvm.kvmd = {
     enable = lib.mkEnableOption "the PiKVM kvmd daemon";
 

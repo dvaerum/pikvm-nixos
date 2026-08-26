@@ -82,8 +82,11 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     in
     {
       imports = [
+        # kvmd.nix transitively imports otg.nix — see module-list.nix /
+        # Round-2 Phase 2 for why each module now imports its own declarers.
+        # local-display.nix is a leaf (nothing else imports it), so it still
+        # needs listing explicitly.
         ../modules/kvmd.nix
-        ../modules/otg.nix
         ../modules/local-display.nix
         self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)
       ];

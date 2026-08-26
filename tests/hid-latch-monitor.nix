@@ -31,11 +31,14 @@ in
 
   nodes.machine = {
     imports = [
+      # kvmd.nix: the real gadget/UDC this test watches (transitively imports
+      # otg.nix). hid-recovery-endpoint.nix transitively imports
+      # runtime-paths.nix, mcp-integration.nix, hid-recovery.nix; and
+      # hid-latch-monitor.nix imports runtime-paths.nix, mcp-integration.nix,
+      # otg.nix itself — see module-list.nix / Round-2 Phase 2 for why each
+      # module now imports its own declarers, which is what makes this list
+      # this short.
       ../modules/kvmd.nix
-      ../modules/otg.nix
-      ../modules/runtime-paths.nix
-      ../modules/mcp-integration.nix
-      ../modules/hid-recovery.nix
       ../modules/hid-recovery-endpoint.nix
       ../modules/hid-latch-monitor.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)

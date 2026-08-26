@@ -30,9 +30,10 @@ let
 
   mkNode = allowToolLogin: {
     imports = [
-      ../modules/kvmd.nix
-      ../modules/otg.nix # kvmd.nix references services.pikvm.otg.enable
-      ../modules/mcp-integration.nix
+      # nginx.nix transitively imports kvmd.nix (→ otg.nix) and
+      # mcp-integration.nix — see module-list.nix / Round-2 Phase 2 for why
+      # each module now imports its own declarers, which is what makes this
+      # list this short.
       ../modules/nginx.nix
       self.nixosModules.mcp-server # services.pikvm-mcp
     ];

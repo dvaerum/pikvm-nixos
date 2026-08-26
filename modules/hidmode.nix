@@ -31,8 +31,6 @@ let
   # hidmode-endpoint.nix before, silently driftable.
   overridePath = config.services.pikvm.runtimePaths.hidmodeOverride.path;
 
-  mkUnitPrefixGrant = import ./lib/unit-prefix-grant.nix { inherit lib; };
-
   # The canonical per-mode override documents, in kvmd's override.d YAML shape
   # (YAML is a superset of JSON, so toJSON is a valid override). BOTH modes are
   # explicit on the topology keys so the mode is authoritative regardless of the
@@ -111,13 +109,16 @@ let
 in
 {
   imports = [
-    # Self-sufficiency: hidMode.default's own default reads
-    # config.services.pikvm.deployment.target.kind (Phase 4) — import the
-    # module that declares it rather than relying on every consumer to have
-    # already imported it ahead of us (the class of bug round2-phase2's
-    # module-self-sufficiency check exists to catch).
+    # runtime-paths.nix, mcp-integration.nix, kvmd.nix, deployment.nix: this
+    # module reads all four (kvmdCfg.enable/.settings + Phase 4's
+    # deployment.target.kind included) — see module-list.nix / Round-2 Phase
+    # 2 for why every module now imports its own declarers directly. None of
+    # these import this file back, so no cycle (unlike hidmode-endpoint.nix —
+    # see this file's config for that story).
+    ./runtime-paths.nix
+    ./mcp-integration.nix
+    ./kvmd.nix
     ./deployment.nix
-
     # Retire the old build-time toggle LOUDLY — an existing config must fail at
     # eval with a pointer, never evaluate clean while quietly losing the setting.
     # This matters extra here: ipadCompat also patched kvmd/apps/otg/hid/mouse.py,
@@ -190,15 +191,15 @@ in
   };
 
   config = lib.mkMerge [
-    (lib.mkIf cfg.endpoint.enable (mkUnitPrefixGrant {
-      feature = "PiKVM HID-mode";
-      comment = ''
-        // PiKVM HID-mode: allow the loopback endpoint's user to start (only) the
-        // mode-switch units.'';
-      unitPrefix = "pikvm-hidmode@";
-      triggerUser = cfg.triggerUser;
-      triggerUserDeclared = config.users.users ? ${cfg.triggerUser};
-    }))
+    # The polkit grant for the loopback endpoint's user to start pikvm-hidmode@
+    # units lives in hidmode-endpoint.nix, not here — "does an HTTP endpoint
+    # exist to grant" is an endpoint-level concern, and gating it on
+    # cfg.endpoint.enable (an option THIS module doesn't declare) would need
+    # this module to import hidmode-endpoint.nix, which already imports this
+    # one — a genuine A↔B module-graph cycle that blows NixOS's module-
+    # collection stack (confirmed: real stack overflow, not a config-value
+    # cycle). Round-2 Phase 2 (2c, module-self-sufficiency) is what surfaced
+    # this was misplaced; see hidmode-endpoint.nix for the relocated grant.
     (lib.mkIf (kvmdCfg.enable && cfg.enable) {
     # Seed the mutable override ONCE (C, not C+ → never clobbered on redeploy).
     # /var/lib/kvmd itself is created by the kvmd module. This single file is the

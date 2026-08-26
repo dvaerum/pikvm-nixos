@@ -153,6 +153,14 @@
                 import ./tests/otg-mode-assembly.nix { inherit self pkgs; }
               );
               janus = pkgs.testers.runNixOSTest (import ./tests/janus.nix { inherit self pkgs; });
+              # Round-2 Phase 2, 2c: boots EVERY module-list.nix module +
+              # mcp-server on one node — nothing else here does. No hardware-
+              # confirmed regression of its own yet (it's new), so stays out
+              # of ci-vm-gate for now, same bar as the 5 above; promote it
+              # once it catches something real.
+              full-stack = pkgs.testers.runNixOSTest (
+                import ./tests/full-stack.nix { inherit self pkgs; }
+              );
               # Real hardware-confirmed regression (it-03400's DeviceAllow/
               # DevicePolicy crash-loop) — belongs in ci-vm-gate, unlike the
               # 5 above.
@@ -179,6 +187,45 @@
               "local-display"
             ];
             missingCiVmGateChecks = lib.filter (n: !(builtins.hasAttr n vmTests)) ciVmGateNames;
+
+            # Minimal fs/boot stub — just enough for a bare nixosSystem's
+            # toplevel to evaluate without a real board's hardware config.
+            # Used by module-standalone below, which composes the FULL
+            # aggregate (self.nixosModules.pikvm) — enabling otg/web there
+            # exercises real cross-module wiring, same as a real deployment.
+            stub = {
+              fileSystems."/" = {
+                device = "/dev/disk/by-label/NIXOS_SD";
+                fsType = "ext4";
+              };
+              boot.loader.grub.enable = false;
+              services.pikvm.otg.enable = true;
+              services.pikvm.web.enable = true;
+              # hidLatchMonitor's real default package comes from the (here,
+              # absent) MCP module — give it something so ENABLING it
+              # (otg.enable=true defaults it on) doesn't itself fail on the
+              # null-package assertion Phase 1 added.
+              services.pikvm.hidLatchMonitor.package = pkgs.hello;
+            };
+
+            # module-self-sufficiency's OWN, deliberately smaller stub: fs/
+            # boot + the overlay (pkgs.pikvm.*, needed by nearly every module,
+            # normally supplied by ./default.nix — NOT module-list.nix, see
+            # its header — so a bare per-leaf nixosSystem needs it added back
+            # here). Crucially, NO otg.enable/web.enable/hidLatchMonitor.package
+            # like `stub` above: those are only valid options once specific
+            # OTHER modules are imported, which isn't true for most single
+            # leaves — setting them here would make single-leaf tests fail for
+            # the wrong reason (option doesn't exist yet) instead of the right
+            # one (module doesn't self-declare what it reads).
+            leafStub = {
+              fileSystems."/" = {
+                device = "/dev/disk/by-label/NIXOS_SD";
+                fsType = "ext4";
+              };
+              boot.loader.grub.enable = false;
+              nixpkgs.overlays = [ (import ./overlays) ];
+            };
           in
           vmTests
           // {
@@ -267,22 +314,6 @@
             # lib/eval-gate.nix for the mechanism.
             module-standalone =
               let
-                # Minimal fs/boot stub — just enough for a bare nixosSystem's
-                # toplevel to evaluate without a real board's hardware config.
-                stub = {
-                  fileSystems."/" = {
-                    device = "/dev/disk/by-label/NIXOS_SD";
-                    fsType = "ext4";
-                  };
-                  boot.loader.grub.enable = false;
-                  services.pikvm.otg.enable = true;
-                  services.pikvm.web.enable = true;
-                  # hidLatchMonitor's real default package comes from the (here,
-                  # absent) MCP module — give it something so ENABLING it
-                  # (otg.enable=true defaults it on) doesn't itself fail on the
-                  # null-package assertion this same Phase 1 fix added.
-                  services.pikvm.hidLatchMonitor.package = pkgs.hello;
-                };
                 mkSys =
                   extraModules:
                   lib.nixosSystem {
@@ -309,6 +340,59 @@
                 inherit pkgs;
                 name = "pikvm-module-standalone";
                 drvPaths = [ (evalDrvPathOf (mkSys [ stub ])) ];
+              };
+
+            # Generalizes module-standalone above from "the AGGREGATE
+            # evaluates standalone" to "every LEAF module evaluates
+            # standalone" — the precise bug class behind this round's CI
+            # outage: a module reading an option only ANOTHER module
+            # declares, invisible as long as every check happens to go
+            # through the full aggregate (which always supplies it).
+            # Round-2 Phase 2 (2b) made every module import its own
+            # declarers directly; this check is what proves that promise
+            # rather than leaving it an assertion nobody verifies.
+            #
+            # Reads the module list from module-list.nix itself (never
+            # re-typed here) so this check can't silently drift from the
+            # real set the appliance uses — the same discipline
+            # module-list.nix's own header explains. Uses `leafStub`, NOT
+            # `stub` above: deliberately WITHOUT mcp-server AND without any
+            # PiKVM option values beyond the overlay — each module must stand
+            # on its own declared imports, not lean on the MCP module or a
+            # sibling module's option happening to be present.
+            module-self-sufficiency =
+              let
+                moduleList = (import ./modules/module-list.nix { }).imports;
+                evalOne =
+                  m:
+                  builtins.tryEval (
+                    evalDrvPathOf (
+                      lib.nixosSystem {
+                        inherit system;
+                        modules = [
+                          m
+                          leafStub
+                        ];
+                      }
+                    )
+                  );
+                results = map (m: {
+                  name = builtins.baseNameOf (toString m);
+                  result = evalOne m;
+                }) moduleList;
+                failed = map (r: r.name) (builtins.filter (r: !r.result.success) results);
+              in
+              assert lib.assertMsg (failed == [ ]) ''
+                checks.module-self-sufficiency: these modules from module-list.nix
+                do NOT evaluate alone (+ the minimal stub, no mcp-server) — each
+                module must directly import every declarer of an option it reads
+                (Round-2 Phase 2, 2b), not rely on the aggregate to supply it:
+                ${builtins.toJSON failed}
+              '';
+              mkEvalGate {
+                inherit pkgs;
+                name = "pikvm-module-self-sufficiency";
+                drvPaths = map (r: r.result.value) results;
               };
 
             # modules/lib/octal.nix's fromOctal/toOctal round-trip, over every

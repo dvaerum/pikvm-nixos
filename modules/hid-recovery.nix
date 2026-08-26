@@ -39,6 +39,11 @@ let
   };
 in
 {
+  # runtime-paths.nix: this module reads it — see module-list.nix / Round-2
+  # Phase 2 for why every module now imports its own declarers directly
+  # instead of relying on the aggregate.
+  imports = [ ./runtime-paths.nix ];
+
   options.services.pikvm.hidRecovery = {
     enable = lib.mkEnableOption ''
       the PiKVM HID-recovery privileged host ops (the pikvm-hid-recover@<action>

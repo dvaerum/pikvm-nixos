@@ -29,6 +29,7 @@ let
   runtimePaths = config.services.pikvm.runtimePaths;
 
   mkLoopbackEndpoint = import ./lib/loopback-endpoint.nix { inherit lib config pkgs; };
+  mkUnitPrefixGrant = import ./lib/unit-prefix-grant.nix { inherit lib; };
 
   # Module-level constants + helpers the routes fragment needs, inserted
   # BEFORE the shared handler.py's imports/class (see loopback-endpoint.nix's
@@ -114,6 +115,15 @@ let
   '';
 in
 {
+  # runtime-paths.nix, mcp-integration.nix, hidmode.nix: this module reads all
+  # three — see module-list.nix / Round-2 Phase 2 for why every module now
+  # imports its own declarers directly instead of relying on the aggregate.
+  imports = [
+    ./runtime-paths.nix
+    ./mcp-integration.nix
+    ./hidmode.nix
+  ];
+
   options.services.pikvm.kvmd.hidMode.endpoint = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -157,6 +167,25 @@ in
         }
       ];
     }
+    # The polkit grant letting THIS endpoint's user start (only) the
+    # pikvm-hidmode@ units. Lives here, not in hidmode.nix: "does an HTTP
+    # endpoint exist to grant to" is an endpoint-level concern, and this
+    # whole config block is already `lib.mkIf cfg.enable` — the grant only
+    # needs to exist when the endpoint does, same condition hidmode.nix used
+    # to gate on via cfg.endpoint.enable before this was relocated. Moving it
+    # here (rather than having hidmode.nix import this file) avoids a genuine
+    # A↔B module-graph cycle — this file already imports hidmode.nix — that
+    # blows NixOS's module-collection stack; see hidmode.nix's config for the
+    # full story (found by checks.module-self-sufficiency, Round-2 Phase 2).
+    (mkUnitPrefixGrant {
+      feature = "PiKVM HID-mode";
+      comment = ''
+        // PiKVM HID-mode: allow the loopback endpoint's user to start (only) the
+        // mode-switch units.'';
+      unitPrefix = "pikvm-hidmode@";
+      triggerUser = hidModeCfg.triggerUser;
+      triggerUserDeclared = config.users.users ? ${hidModeCfg.triggerUser};
+    })
     (mkLoopbackEndpoint {
       description = "PiKVM HID-mode";
       name = "hidmode";

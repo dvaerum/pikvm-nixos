@@ -17,11 +17,10 @@
 
   nodes.machine = {
     imports = [
-      ../modules/kvmd.nix
-      ../modules/otg.nix
-      ../modules/runtime-paths.nix
-      ../modules/mcp-integration.nix
-      ../modules/hidmode.nix
+      # hidmode-endpoint.nix transitively imports hidmode.nix, which in turn
+      # imports kvmd.nix (→ otg.nix), runtime-paths.nix, and mcp-integration.nix
+      # — see module-list.nix / Round-2 Phase 2 for why each module now
+      # imports its own declarers, which is what makes this list this short.
       ../modules/hidmode-endpoint.nix
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)
     ];

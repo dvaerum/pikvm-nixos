@@ -15,11 +15,11 @@
 
   nodes.machine = {
     imports = [
-      ../modules/kvmd.nix
-      ../modules/otg.nix # kvmd.nix references services.pikvm.otg.enable
-      ../modules/mcp-integration.nix
+      # nginx.nix transitively imports webterm.nix (its very first import),
+      # kvmd.nix (→ otg.nix), and mcp-integration.nix — see module-list.nix /
+      # Round-2 Phase 2 for why each module now imports its own declarers,
+      # which is what makes this list this short.
       ../modules/nginx.nix
-      ../modules/webterm.nix # declares services.pikvm.web.terminal + the kvmd-webterm unit/user
       self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)
     ];
 

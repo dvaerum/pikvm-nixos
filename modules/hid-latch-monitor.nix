@@ -47,12 +47,17 @@ let
     deploymentCfg.target.alwaysAttached && lib.elem "not attached" cfg.healthyStates;
 in
 {
-  # Self-sufficiency: healthyStates' own default reads
-  # config.services.pikvm.deployment.target.alwaysAttached (Phase 4) — import
-  # the module that declares it rather than relying on every consumer to have
-  # already imported it ahead of us (the class of bug round2-phase2's
-  # module-self-sufficiency check exists to catch).
-  imports = [ ./deployment.nix ];
+  # runtime-paths.nix, mcp-integration.nix, otg.nix, deployment.nix: this
+  # module reads all four (config.services.pikvm.otg.enable + Phase 4's
+  # deployment.target.alwaysAttached included) — see module-list.nix /
+  # Round-2 Phase 2 for why every module now imports its own declarers
+  # directly instead of relying on the aggregate.
+  imports = [
+    ./runtime-paths.nix
+    ./mcp-integration.nix
+    ./otg.nix
+    ./deployment.nix
+  ];
 
   options.services.pikvm.hidLatchMonitor = {
     enable = lib.mkOption {

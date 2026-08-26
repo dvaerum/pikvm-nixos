@@ -59,6 +59,14 @@ let
   '';
 in
 {
+  # runtime-paths.nix, hidmode-endpoint.nix: this module reads both — see
+  # module-list.nix / Round-2 Phase 2 for why every module now imports its
+  # own declarers directly instead of relying on the aggregate.
+  imports = [
+    ./runtime-paths.nix
+    ./hidmode-endpoint.nix
+  ];
+
   options.services.pikvm.web.hidModeControl = {
     enable = lib.mkOption {
       type = lib.types.bool;

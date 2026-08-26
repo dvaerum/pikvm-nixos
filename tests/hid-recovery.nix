@@ -19,11 +19,12 @@
     { ... }:
     {
       imports = [
+        # kvmd.nix: the real gadget/UDC this test recovers (transitively
+        # imports otg.nix). hid-recovery-endpoint.nix transitively imports
+        # runtime-paths.nix, mcp-integration.nix, and hid-recovery.nix itself
+        # — see module-list.nix / Round-2 Phase 2 for why each module now
+        # imports its own declarers, which is what makes this list this short.
         ../modules/kvmd.nix
-        ../modules/otg.nix
-        ../modules/runtime-paths.nix
-        ../modules/mcp-integration.nix
-        ../modules/hid-recovery.nix
         ../modules/hid-recovery-endpoint.nix
         # Declares services.pikvm-mcp so the endpoint's MCP-wiring definition
         # resolves. Left DISABLED (default) — the endpoint runs standalone here;
@@ -67,10 +68,6 @@
     {
       imports = [
         ../modules/kvmd.nix
-        ../modules/otg.nix
-        ../modules/runtime-paths.nix
-        ../modules/mcp-integration.nix
-        ../modules/hid-recovery.nix
         ../modules/hid-recovery-endpoint.nix
         self.nixosModules.mcp-server
       ];

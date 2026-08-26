@@ -1,25 +1,12 @@
-# Aggregate PiKVM NixOS module. Import this (exposed as
-# `nixosModules.pikvm` / `.default`) to get the full stack; individual
-# feature modules are toggled through their own `services.pikvm.*` options.
+# Aggregate PiKVM module. Import this (exposed as `nixosModules.pikvm` /
+# `.default`) to get the full stack; individual feature modules are toggled
+# through their own `services.pikvm.*` options.
+#
+# The module graph itself lives in ./module-list.nix, kept separate from the
+# overlay below — see that file's header for why.
 { ... }:
 {
-  imports = [
-    ./mcp-integration.nix
-    ./runtime-paths.nix
-    ./deployment.nix
-    ./system/auto-upgrade.nix
-    ./otg.nix
-    ./kvmd.nix
-    ./hidmode.nix
-    ./hidmode-endpoint.nix
-    ./nginx.nix
-    ./janus.nix
-    ./hid-recovery.nix
-    ./hid-recovery-endpoint.nix
-    ./hid-latch-monitor.nix
-    ./local-display.nix
-    # ./webterm.nix is imported by ./nginx.nix (the web front-door owns it).
-  ];
+  imports = [ ./module-list.nix ];
 
   # Make the PiKVM package scope (`pkgs.pikvm.*`) available to every module
   # and to the system itself.

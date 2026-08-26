@@ -31,7 +31,9 @@ in
   # declared option tree independently of which branch wins, so that option
   # must exist wherever THIS module is imported. Import the module that
   # declares it rather than relying on every consumer to have already done
-  # so ahead of us.
+  # so ahead of us. Caught by checks.module-self-sufficiency (Round-2 Phase
+  # 2, 2c) — this module's own leaf-level gap wasn't in 2b's hand-audited
+  # list either, until the gate itself found it.
   imports = [ ./system/auto-upgrade.nix ];
 
   options.services.pikvm.deployment = {

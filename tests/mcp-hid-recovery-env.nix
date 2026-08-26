@@ -23,9 +23,12 @@
     { ... }:
     {
       imports = [
-        ../modules/runtime-paths.nix
-        ../modules/mcp-integration.nix
-        ../modules/hid-recovery.nix
+        # hid-recovery-endpoint.nix transitively imports runtime-paths.nix,
+        # mcp-integration.nix, and hid-recovery.nix — see module-list.nix /
+        # Round-2 Phase 2 for why each module now imports its own declarers,
+        # which is what makes this list this short (still no kvmd/nginx/otg —
+        # the URL wiring this test asserts is independent of them, per the
+        # header above).
         ../modules/hid-recovery-endpoint.nix
         self.nixosModules.mcp-server # services.pikvm-mcp (defaults enable = true)
       ];

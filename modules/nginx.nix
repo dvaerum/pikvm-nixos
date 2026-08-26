@@ -122,6 +122,11 @@ in
   imports = [
     ./webterm.nix
     ./hidmode-web.nix
+    # mcp-integration.nix: reads services.pikvm.mcp.*. kvmd.nix: this module
+    # writes kvmd.settings.kvmd.info.extras (below) — see module-list.nix /
+    # Round-2 Phase 2 for why every module now imports its own declarers.
+    ./mcp-integration.nix
+    ./kvmd.nix
   ];
 
   options.services.pikvm.web = {

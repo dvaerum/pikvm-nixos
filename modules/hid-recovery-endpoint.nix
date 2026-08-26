@@ -39,6 +39,16 @@ let
   '';
 in
 {
+  # runtime-paths.nix, mcp-integration.nix, hid-recovery.nix: this module
+  # reads all three — see module-list.nix / Round-2 Phase 2 for why every
+  # module now imports its own declarers directly instead of relying on the
+  # aggregate.
+  imports = [
+    ./runtime-paths.nix
+    ./mcp-integration.nix
+    ./hid-recovery.nix
+  ];
+
   options.services.pikvm.hidRecovery.endpoint = {
     enable = lib.mkOption {
       type = lib.types.bool;

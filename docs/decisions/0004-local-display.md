@@ -137,9 +137,10 @@ tracked separately per the module's own header, unaffected by this ADR).
 ## Consequences
 
 - Any future edit to `modules/local-display.nix` that reintroduces the
-  DeviceAllow crash-loop gets caught by CI (`checks.<system>.
-  local-display`) before it ever reaches an appliance again — the exact
-  regression class this ADR closes.
+  DeviceAllow crash-loop gets caught by CI — `checks.<system>.local-display`
+  is one of the checks bundled into `checks.<system>.ci-vm-gate`, which the
+  `vm-test` workflow job builds on every push/PR — before it ever reaches an
+  appliance again. This is the exact regression class this ADR closes.
 - `sysfsDrmRoot` being `internal = true` means it won't show up in generated
   option docs; if a real use case for a non-default DRM sysfs root ever
   surfaces, flip that to `false` rather than adding a second option.

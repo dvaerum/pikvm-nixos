@@ -8,7 +8,7 @@ command here and read the same build log.
 
 The commands below are transcribed **verbatim** from the CI workflows, so they
 are exactly what CI runs — nothing paraphrased from memory. The VM-test path
-(`checks.x86_64-linux.hid-recovery`) has been executed end-to-end on the Linux
+(`checks.x86_64-linux.ci-vm-gate`) has been executed end-to-end on the Linux
 build host; the rest are the same `nix build`/`nix eval` invocations against the
 same flake attributes CI targets.
 
@@ -116,25 +116,29 @@ nix build --print-build-logs .#packages.x86_64-linux.pikvm-mcp-server
 The vendor kernels for the rpi4/zero2w toplevels come from the cachix cache — if
 you see the kernel *building*, your substituter isn't trusted (§1).
 
-### CI job `vm-test` — "NixOS VM tests"
-Needs `/dev/kvm` (§1). Each check builds a system and boots it in a VM; a green
-build == a passing test.
+### CI job `vm-test` — "NixOS VM tests (ci-vm-gate)"
+Needs `/dev/kvm` (§1). `ci-vm-gate` is a `linkFarm` bundling every VM test with
+hardware-confirmed regression history (see `flake.nix`'s `ciVmGateNames` for the
+current list + rationale) — building it builds and boots all of them; a green
+build == all of them passing.
 ```sh
-nix build --print-build-logs .#checks.x86_64-linux.kvmd-services
-nix build --print-build-logs .#checks.x86_64-linux.mcp-proxy
+nix build --print-build-logs .#checks.x86_64-linux.ci-vm-gate
+```
+Debugging a single check within the gate (swap in the attr name from
+`ciVmGateNames`):
+```sh
 nix build --print-build-logs .#checks.x86_64-linux.hid-recovery
-nix build --print-build-logs .#checks.x86_64-linux.mcp-hid-recovery-env
 ```
 Reading results / logs:
 ```sh
 # The interactive test driver (step through / poke the VM) for any check:
 nix build .#checks.x86_64-linux.hid-recovery.driverInteractive && ./result/bin/nixos-test-driver
 # Re-run and keep the full log even on success:
-nix build --print-build-logs -L .#checks.x86_64-linux.mcp-proxy
+nix build --print-build-logs -L .#checks.x86_64-linux.ci-vm-gate
 ```
 Long runs: detach so a dropped shell doesn't kill the build —
-`setsid nix build … .#checks.x86_64-linux.mcp-proxy > mcp.log 2>&1 &` then
-`tail -f mcp.log`.
+`setsid nix build … .#checks.x86_64-linux.ci-vm-gate > gate.log 2>&1 &` then
+`tail -f gate.log`.
 
 ---
 
@@ -193,11 +197,7 @@ nix build --print-build-logs \
   .#packages.x86_64-linux.pikvm-mcp-server
 
 echo "== vm-test (needs /dev/kvm) =="
-nix build --print-build-logs \
-  .#checks.x86_64-linux.kvmd-services \
-  .#checks.x86_64-linux.mcp-proxy \
-  .#checks.x86_64-linux.hid-recovery \
-  .#checks.x86_64-linux.mcp-hid-recovery-env
+nix build --print-build-logs .#checks.x86_64-linux.ci-vm-gate
 
 echo "ALL CI JOBS PASSED LOCALLY"
 ```

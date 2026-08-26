@@ -76,12 +76,12 @@ jobs:
         run: nix build --print-build-logs .#packages.x86_64-linux.pikvm-mcp-server
 
   vm-test:
-    name: NixOS VM tests (kvmd-services + mcp-proxy)
+    name: NixOS VM tests (ci-vm-gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The mcp-proxy check is a 2-node VM that also builds the MCP server
-      # (onnxruntime/sharp) — reclaim runner disk so it fits.
+      # mcp-proxy (one of the 7 gated checks) is a 2-node VM that also builds
+      # the MCP server (onnxruntime/sharp) — reclaim runner disk so it fits.
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -98,12 +98,9 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
         with:
           determinate: false
-      - name: Run the kvmd-services VM test
-        run: nix build --print-build-logs .#checks.x86_64-linux.kvmd-services
-      # Unified-auth end-to-end (kvmd + nginx front-door + mcp security=kvmd).
-      - name: Run the mcp-proxy VM test
-        run: nix build --print-build-logs .#checks.x86_64-linux.mcp-proxy
-      # HID recovery: real UDC re-enumeration + polkit least-privilege +
-      # the authenticated loopback endpoint → systemctl path.
-      - name: Run the hid-recovery VM test
-        run: nix build --print-build-logs .#checks.x86_64-linux.hid-recovery
+      # ci-vm-gate is a linkFarm bundling every VM test with hardware-confirmed
+      # regression history (see flake.nix's ciVmGateNames comment for the list
+      # and rationale) — one command instead of one step per check keeps this
+      # job from silently drifting out of sync with the actual check set.
+      - name: Run the ci-vm-gate VM test suite
+        run: nix build --print-build-logs .#checks.x86_64-linux.ci-vm-gate

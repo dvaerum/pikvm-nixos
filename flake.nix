@@ -77,6 +77,8 @@
         inherit system;
         overlays = [ self.overlays.default ];
       };
+
+      inherit (import ./lib/eval-gate.nix { inherit lib; }) evalDrvPathOf mkEvalGate mustNotEval;
     in
     {
       # ---- Packages (PiKVM-specific derivations) --------------------------
@@ -105,107 +107,140 @@
         let
           pkgs = pkgsFor system;
         in
-        lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          kvmd-services = pkgs.testers.runNixOSTest (
-            import ./tests/kvmd-services.nix { inherit self pkgs; }
-          );
-          hidmode = pkgs.testers.runNixOSTest (
-            import ./tests/hidmode.nix { inherit self pkgs; }
-          );
-          mcp-proxy = pkgs.testers.runNixOSTest (
-            import ./tests/mcp-proxy.nix { inherit self pkgs; }
-          );
-          hid-recovery = pkgs.testers.runNixOSTest (
-            import ./tests/hid-recovery.nix { inherit self pkgs; }
-          );
-          hid-latch-monitor = pkgs.testers.runNixOSTest (
-            import ./tests/hid-latch-monitor.nix { inherit self pkgs; }
-          );
-          mcp-hid-recovery-env = pkgs.testers.runNixOSTest (
-            import ./tests/mcp-hid-recovery-env.nix { inherit self pkgs; }
-          );
-          webterm = pkgs.testers.runNixOSTest (
-            import ./tests/webterm.nix { inherit self pkgs; }
-          );
-          http-redirect = pkgs.testers.runNixOSTest (
-            import ./tests/http-redirect.nix { inherit self pkgs; }
-          );
-          hidmode-web = pkgs.testers.runNixOSTest (
-            import ./tests/hidmode-web.nix { inherit self pkgs; }
-          );
-          otg-mode-assembly = pkgs.testers.runNixOSTest (
-            import ./tests/otg-mode-assembly.nix { inherit self pkgs; }
-          );
-          janus = pkgs.testers.runNixOSTest (
-            import ./tests/janus.nix { inherit self pkgs; }
-          );
-          local-display = pkgs.testers.runNixOSTest (
-            import ./tests/local-display.nix { inherit self pkgs; }
-          );
+        lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+          let
+            # Real VM tests: each builds a system and boots it in a VM; a
+            # green build == a passing test. Kept as its own binding (not
+            # folded straight into the returned attrset) so `ci-vm-gate`
+            # below can reference these by name via `vmTests.${n}` — Nix
+            # doesn't allow bare hyphenated identifiers as `rec`
+            # self-references (`kvmd-services` alone would parse as
+            # subtraction), so dynamic `.${n}` lookup on a plain `let`
+            # binding is the idiom, not `rec { }`.
+            vmTests = {
+              kvmd-services = pkgs.testers.runNixOSTest (
+                import ./tests/kvmd-services.nix { inherit self pkgs; }
+              );
+              hidmode = pkgs.testers.runNixOSTest (import ./tests/hidmode.nix { inherit self pkgs; });
+              mcp-proxy = pkgs.testers.runNixOSTest (import ./tests/mcp-proxy.nix { inherit self pkgs; });
+              hid-recovery = pkgs.testers.runNixOSTest (
+                import ./tests/hid-recovery.nix { inherit self pkgs; }
+              );
+              hid-latch-monitor = pkgs.testers.runNixOSTest (
+                import ./tests/hid-latch-monitor.nix { inherit self pkgs; }
+              );
+              mcp-hid-recovery-env = pkgs.testers.runNixOSTest (
+                import ./tests/mcp-hid-recovery-env.nix { inherit self pkgs; }
+              );
+              # These 5 stay eval-only in CI (not in ci-vm-gate below) — a
+              # recorded decision, not an oversight: webterm/http-redirect/
+              # hidmode-web are thin composition checks over already-covered
+              # modules (nginx/webterm proper get exercised via the gated
+              # tests above; these mainly prove the extra wiring doesn't
+              # break eval), otg-mode-assembly is exhaustively covered by its
+              # own eval-level eval assertions already, and janus is WIP/
+              # default-off (no shipped host enables it yet). Promote any of
+              # these to ci-vm-gate if it gains a real hardware-confirmed
+              # regression history, same bar as the 7 below.
+              webterm = pkgs.testers.runNixOSTest (import ./tests/webterm.nix { inherit self pkgs; });
+              http-redirect = pkgs.testers.runNixOSTest (
+                import ./tests/http-redirect.nix { inherit self pkgs; }
+              );
+              hidmode-web = pkgs.testers.runNixOSTest (
+                import ./tests/hidmode-web.nix { inherit self pkgs; }
+              );
+              otg-mode-assembly = pkgs.testers.runNixOSTest (
+                import ./tests/otg-mode-assembly.nix { inherit self pkgs; }
+              );
+              janus = pkgs.testers.runNixOSTest (import ./tests/janus.nix { inherit self pkgs; });
+              # Real hardware-confirmed regression (it-03400's DeviceAllow/
+              # DevicePolicy crash-loop) — belongs in ci-vm-gate, unlike the
+              # 5 above.
+              local-display = pkgs.testers.runNixOSTest (
+                import ./tests/local-display.nix { inherit self pkgs; }
+              );
+            };
 
-          # Aggregate-composition gate: (1) force EVALUATION of every shipped
-          # host's toplevel — the per-module VM tests above import modules in
-          # isolation, so they miss cross-module conflicts that only surface in
-          # the assembled host (e.g. two endpoints both assigning pikvm-mcp's
-          # single-valued serviceConfig.EnvironmentFile, which fails eval on the
-          # real appliance while every per-module test stays green). (2) assert
-          # the appliance actually LOADS BOTH MCP-facing endpoints' env files —
-          # the list-contribute invariant: both concatenate, neither wins (a
-          # future "simplify to one scalar" would still eval, so (1) alone can't
-          # catch it). Eval-only (drvPath — no VM, no realise, seconds).
-          host-eval =
-            let
-              # `unsafeDiscardStringContext`: a bare `.drvPath` embedded in a
-              # derivation attribute still carries string CONTEXT pointing at
-              # that .drv — Nix treats an in-context .drv reference as a real
-              # inputDrv, which means BUILDING that input's default output
-              # before this runCommand can run at all. Without the discard,
-              # "eval-only, seconds" above is false: `nix build` on this
-              # attribute silently realizes every host's FULL closure (kernel
-              # included — confirmed via a real `nix build -L`, hundreds of
-              # derivations / tens of GiB). Discarding the context keeps the
-              # STRING (the drv path text) while dropping the build
-              # dependency — instantiation (producing the .drv file) still
-              # happens, since concatStringsSep/toJSON below need the actual
-              # path text, but nothing downstream needs it BUILT. See
-              # docs/learnings/nix-drvpath-string-context.md.
-              hostDrvs = lib.mapAttrsToList (
-                _: sys: builtins.unsafeDiscardStringContext sys.config.system.build.toplevel.drvPath
-              ) self.nixosConfigurations;
-              applianceMcpEnv =
-                self.nixosConfigurations.rpi4.config.systemd.services.pikvm-mcp.serviceConfig.EnvironmentFile or [ ];
-              bothMcpEnvLoaded =
-                builtins.elem "/run/pikvm-hid-recovery/mcp.env" applianceMcpEnv
-                && builtins.elem "/run/pikvm-hidmode/mcp.env" applianceMcpEnv;
-            in
-            assert lib.assertMsg bothMcpEnvLoaded
-              "appliance pikvm-mcp must load BOTH endpoints' env files (hid-recovery + hidmode); got ${builtins.toJSON applianceMcpEnv}";
-            pkgs.runCommand "pikvm-host-eval" {
-              drvs = lib.concatStringsSep "\n" hostDrvs;
-            } "printf '%s\\n' \"$drvs\" > $out";
+            # The checks CI actually gates merges on (ci.yml's vm-test job —
+            # see docs/running-ci-locally.md §2/§4 for the single command
+            # this collapses to). Each has a real, hardware-confirmed
+            # regression history (see each test file's own header) — that's
+            # the bar for inclusion here, not "every VM test we happen to
+            # have". Closes docs/decisions/0004-local-display.md's
+            # Consequences claim ("gets caught by CI") — true again as of
+            # this check's addition, previously aspirational.
+            ciVmGateNames = [
+              "kvmd-services"
+              "mcp-proxy"
+              "hid-recovery"
+              "mcp-hid-recovery-env"
+              "hid-latch-monitor"
+              "hidmode"
+              "local-display"
+            ];
+            missingCiVmGateChecks = lib.filter (n: !(builtins.hasAttr n vmTests)) ciVmGateNames;
+          in
+          vmTests
+          // {
+            # Guard against a typo'd/renamed/removed vmTests entry silently
+            # dropping coverage from ci-vm-gate below instead of failing
+            # loudly at eval.
+            ci-vm-gate =
+              assert lib.assertMsg (missingCiVmGateChecks == [ ]) ''
+                checks.ci-vm-gate names checks that don't exist in vmTests:
+                ${builtins.toJSON missingCiVmGateChecks} — a rename or removal
+                upstream broke this list without updating it.
+              '';
+              pkgs.linkFarm "pikvm-ci-vm-gate" (
+                map (n: {
+                  name = n;
+                  path = vmTests.${n};
+                }) ciVmGateNames
+              );
 
-          # Standalone-consumption gate for the public `nixosModules.appliance`
-          # output, mirroring exactly how template/flake.nix consumes it (bare
-          # `nixpkgs.lib.nixosSystem` + a hostName override, no repo-internal
-          # wiring). hosts/default.nix's `universal` nixosConfiguration happens
-          # to compose identically today, so host-eval above already exercises
-          # this content — but that's incidental, not guaranteed: if `universal`
-          # ever stops being "exactly nixosModules.appliance", this check still
-          # catches a break in the actual downstream entry point.
-          #
-          # unsafeDiscardStringContext (see host-eval's hostDrvs comment above
-          # for the full mechanism): this originally returned
-          # `.config.system.build.toplevel` (the derivation itself, not even
-          # `.drvPath`) as the check's OWN build output — `nix build` on this
-          # attribute WAS the full appliance build, kernel included (confirmed
-          # via a real run: hundreds of derivations, tens of GiB, aarch64
-          # cross-built via QEMU emulation). Fixed the same way: force
-          # `.drvPath` with the string context discarded, via a tiny
-          # runCommand, matching host-eval/module-standalone.
-          appliance-standalone =
-            let
-              drv =
-                (nixpkgs.lib.nixosSystem {
+            # Aggregate-composition gate: (1) force EVALUATION of every shipped
+            # host's toplevel — the per-module VM tests above import modules in
+            # isolation, so they miss cross-module conflicts that only surface in
+            # the assembled host (e.g. two endpoints both assigning pikvm-mcp's
+            # single-valued serviceConfig.EnvironmentFile, which fails eval on the
+            # real appliance while every per-module test stays green). (2) assert
+            # the appliance actually LOADS BOTH MCP-facing endpoints' env files —
+            # the list-contribute invariant: both concatenate, neither wins (a
+            # future "simplify to one scalar" would still eval, so (1) alone can't
+            # catch it). Eval-only (drvPath — no VM, no realise, seconds); see
+            # lib/eval-gate.nix for the mechanism.
+            host-eval =
+              let
+                hostDrvs = lib.mapAttrsToList (_: sys: evalDrvPathOf sys) self.nixosConfigurations;
+                rpi4RuntimePaths = self.nixosConfigurations.rpi4.config.services.pikvm.runtimePaths;
+                applianceMcpEnv =
+                  self.nixosConfigurations.rpi4.config.systemd.services.pikvm-mcp.serviceConfig.EnvironmentFile or [ ];
+                bothMcpEnvLoaded =
+                  builtins.elem rpi4RuntimePaths.hidRecoveryMcpEnv.path applianceMcpEnv
+                  && builtins.elem rpi4RuntimePaths.hidmodeMcpEnv.path applianceMcpEnv;
+              in
+              assert lib.assertMsg bothMcpEnvLoaded
+                "appliance pikvm-mcp must load BOTH endpoints' env files (hid-recovery + hidmode); got ${builtins.toJSON applianceMcpEnv}";
+              mkEvalGate {
+                inherit pkgs;
+                name = "pikvm-host-eval";
+                drvPaths = hostDrvs;
+              };
+
+            # Standalone-consumption gate for the public `nixosModules.appliance`
+            # output, mirroring exactly how template/flake.nix consumes it (bare
+            # `nixpkgs.lib.nixosSystem` + a hostName override, no repo-internal
+            # wiring). hosts/default.nix's `universal` nixosConfiguration happens
+            # to compose identically today, so host-eval above already exercises
+            # this content — but that's incidental, not guaranteed: if `universal`
+            # ever stops being "exactly nixosModules.appliance", this check still
+            # catches a break in the actual downstream entry point. Eval-only; see
+            # lib/eval-gate.nix for the mechanism (this check's own past bug: it
+            # used to return the derivation itself, not even `.drvPath` — `nix
+            # build` on it WAS the full appliance build, kernel included).
+            appliance-standalone =
+              let
+                sys = nixpkgs.lib.nixosSystem {
                   # Fixed aarch64-linux, matching hosts/default.nix's `universal`
                   # (and every real PiKVM target) regardless of the evaluating
                   # host's own architecture — eval-only, so no cross-build needed.
@@ -214,68 +249,70 @@
                     self.nixosModules.appliance
                     { networking.hostName = "mykvm"; }
                   ];
-                }).config.system.build.toplevel.drvPath;
-            in
-            pkgs.runCommand "pikvm-appliance-standalone" {
-              drv = builtins.unsafeDiscardStringContext drv;
-            } "printf '%s\\n' \"$drv\" > $out";
-
-          # Standalone-composability gate: nixosModules.pikvm is documented
-          # (below, this file) as importable WITHOUT nixosModules.mcp-server —
-          # this check PROVES that, rather than leaving it an assertion nobody
-          # verifies. This is the exact composition that broke once already:
-          # every module referencing services.pikvm-mcp.* threw "The option
-          # `services.pikvm-mcp' does not exist" at eval, invisible to every
-          # OTHER check here because they all go through nixosConfigurations
-          # (hosts/), which always bundles mcp-server.
-          module-standalone =
-            let
-              # Minimal fs/boot stub — just enough for a bare nixosSystem's
-              # toplevel to evaluate without a real board's hardware config.
-              stub = {
-                fileSystems."/" = {
-                  device = "/dev/disk/by-label/NIXOS_SD";
-                  fsType = "ext4";
                 };
-                boot.loader.grub.enable = false;
-                services.pikvm.otg.enable = true;
-                services.pikvm.web.enable = true;
-                # hidLatchMonitor's real default package comes from the (here,
-                # absent) MCP module — give it something so ENABLING it
-                # (otg.enable=true defaults it on) doesn't itself fail on the
-                # null-package assertion this same Phase 1 fix added.
-                services.pikvm.hidLatchMonitor.package = pkgs.hello;
+              in
+              mkEvalGate {
+                inherit pkgs;
+                name = "pikvm-appliance-standalone";
+                drvPaths = [ (evalDrvPathOf sys) ];
               };
-              # unsafeDiscardStringContext — see the matching comment on
-              # host-eval's hostDrvs above: without it, `nix build` on this
-              # check silently realizes the FULL stub system (kernel
-              # included) instead of just instantiating it.
-              evalDrvPath =
-                extraModules:
-                builtins.unsafeDiscardStringContext (lib.nixosSystem {
-                  inherit system;
-                  modules = [ self.nixosModules.pikvm ] ++ extraModules;
-                }).config.system.build.toplevel.drvPath;
-            in
-            # NEGATIVE CONTROL, checked first: the same composition WITHOUT the
-            # stub must still fail (no fileSystems/boot config — an ordinary,
-            # expected NixOS requirement, unrelated to the MCP-optionality bug
-            # this Phase 1 fixes). This is the check whose absence let the bug
-            # ship: without proof the mechanism can detect A failure, a
-            # positive-only check risks silently passing for the wrong reason
-            # (e.g. `.drvPath` not forced deeply enough to surface an error).
-            assert lib.assertMsg (!(builtins.tryEval (evalDrvPath [ ])).success) ''
-              checks.module-standalone's negative control failed: nixosModules.pikvm
-              ALONE (no fs/boot stub) evaluated successfully. Either something now
-              provides fileSystems/boot config by default (update this check's stub
-              accordingly) or this check's own failure-detection is broken — in
-              either case this check can no longer prove the positive case below
-              means what it claims to.
-            '';
-            pkgs.runCommand "pikvm-module-standalone" {
-              drv = evalDrvPath [ stub ];
-            } "printf '%s\\n' \"$drv\" > $out";
-        }
+
+            # Standalone-composability gate: nixosModules.pikvm is documented
+            # (below, this file) as importable WITHOUT nixosModules.mcp-server —
+            # this check PROVES that, rather than leaving it an assertion nobody
+            # verifies. This is the exact composition that broke once already:
+            # every module referencing services.pikvm-mcp.* threw "The option
+            # `services.pikvm-mcp' does not exist" at eval, invisible to every
+            # OTHER check here because they all go through nixosConfigurations
+            # (hosts/), which always bundles mcp-server. Eval-only; see
+            # lib/eval-gate.nix for the mechanism.
+            module-standalone =
+              let
+                # Minimal fs/boot stub — just enough for a bare nixosSystem's
+                # toplevel to evaluate without a real board's hardware config.
+                stub = {
+                  fileSystems."/" = {
+                    device = "/dev/disk/by-label/NIXOS_SD";
+                    fsType = "ext4";
+                  };
+                  boot.loader.grub.enable = false;
+                  services.pikvm.otg.enable = true;
+                  services.pikvm.web.enable = true;
+                  # hidLatchMonitor's real default package comes from the (here,
+                  # absent) MCP module — give it something so ENABLING it
+                  # (otg.enable=true defaults it on) doesn't itself fail on the
+                  # null-package assertion this same Phase 1 fix added.
+                  services.pikvm.hidLatchMonitor.package = pkgs.hello;
+                };
+                mkSys =
+                  extraModules:
+                  lib.nixosSystem {
+                    inherit system;
+                    modules = [ self.nixosModules.pikvm ] ++ extraModules;
+                  };
+              in
+              # NEGATIVE CONTROL, checked first: the same composition WITHOUT the
+              # stub must still fail (no fileSystems/boot config — an ordinary,
+              # expected NixOS requirement, unrelated to the MCP-optionality bug
+              # this Phase 1 fixes). This is the check whose absence let the bug
+              # ship: without proof the mechanism can detect A failure, a
+              # positive-only check risks silently passing for the wrong reason
+              # (e.g. `.drvPath` not forced deeply enough to surface an error).
+              assert lib.assertMsg (mustNotEval (evalDrvPathOf (mkSys [ ]))) ''
+                checks.module-standalone's negative control failed: nixosModules.pikvm
+                ALONE (no fs/boot stub) evaluated successfully. Either something now
+                provides fileSystems/boot config by default (update this check's stub
+                accordingly) or this check's own failure-detection is broken — in
+                either case this check can no longer prove the positive case below
+                means what it claims to.
+              '';
+              mkEvalGate {
+                inherit pkgs;
+                name = "pikvm-module-standalone";
+                drvPaths = [ (evalDrvPathOf (mkSys [ stub ])) ];
+              };
+          }
+        )
       );
 
       # ---- NixOS modules --------------------------------------------------

@@ -34,6 +34,17 @@ let
   statusDir = builtins.dirOf statusPath;
 
   octal = import ./lib/octal.nix { inherit lib; };
+
+  # Phase 4: healthyStates's OWN default now derives from this (see the
+  # option above) — so under default settings the two never disagree. This
+  # can only fire when a host overrides healthyStates directly, leaving out
+  # "not attached", while deployment.target.alwaysAttached still says the box
+  # is intermittently cabled after all — exactly the drift the derivation was
+  # meant to prevent, and the dangerous direction: a genuine VBUS latch on an
+  # always-attached target goes uncaught if the two disagree this way.
+  deploymentCfg = config.services.pikvm.deployment;
+  alwaysAttachedDisagrees =
+    deploymentCfg.target.alwaysAttached && lib.elem "not attached" cfg.healthyStates;
 in
 {
   options.services.pikvm.hidLatchMonitor = {
@@ -67,17 +78,26 @@ in
 
     healthyStates = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [
-        "configured"
-        "not attached"
-      ];
+      default =
+        if config.services.pikvm.deployment.target.alwaysAttached then
+          [ "configured" ]
+        else
+          [
+            "configured"
+            "not attached"
+          ];
+      defaultText = lib.literalExpression ''
+        if config.services.pikvm.deployment.target.alwaysAttached then [ "configured" ] else [ "configured" "not attached" ]
+      '';
       description = ''
         The UDC `state` values considered healthy WHILE THE GADGET IS BOUND.
-        Default accepts a configured target AND an unplugged one ("not attached")
-        — bound-ness is the real gate, so a legitimate unplug does not false-fire.
-        Set to just `[ "configured" ]` on a target-ALWAYS-attached deployment to
-        also detect the VBUS-latch second fault mode (at the cost of firing on a
-        legitimate unplug — hence opt-in). See ADR 0003.
+        Defaults from `services.pikvm.deployment.target.alwaysAttached`: `false`
+        (most boxes) accepts a configured target AND an unplugged one ("not
+        attached") — bound-ness is the real gate, so a legitimate unplug does
+        not false-fire. `true` (a target that's PERMANENTLY cabled) narrows to
+        just `[ "configured" ]`, additionally detecting the VBUS-latch second
+        fault mode — at the cost of firing on a legitimate unplug, which is why
+        it's opt-in via `alwaysAttached` rather than the default. See ADR 0003.
       '';
     };
 
@@ -132,6 +152,10 @@ in
         '';
       }
     ];
+
+    warnings = lib.optional alwaysAttachedDisagrees ''
+      services.pikvm.deployment.target.alwaysAttached = true but services.pikvm.hidLatchMonitor.healthyStates still includes "not attached" (${builtins.toJSON cfg.healthyStates}). healthyStates now derives from alwaysAttached by default, so this box overrode one without the other — and the dangerous direction: a genuine VBUS latch on this always-attached target won't be caught. Make them agree (drop the override, or set alwaysAttached = false if this box really can be legitimately unplugged), or override healthyStates deliberately if you mean it.
+    '';
 
     systemd.services.pikvm-hid-latch-monitor = {
       description = "PiKVM HID-latch monitor (report-only)";

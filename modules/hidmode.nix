@@ -84,12 +84,28 @@ let
   ];
   userTouchedKeys = lib.filter (p: lib.hasAttrByPath p kvmdCfg.settings) ownedKeyPaths;
 
+  # Phase 4: hidMode.default's OWN default now derives from this (see the
+  # option above) — so under default settings the two never disagree. This
+  # can only fire when a host overrides ONE side without the other (e.g. a
+  # plain `hidMode.default = "ipad"` while `deployment.target.kind` stays
+  # "desktop") — exactly the drift the derivation was meant to prevent.
+  deploymentCfg = config.services.pikvm.deployment;
+  targetKindDisagrees = deploymentCfg.target.kind != cfg.default;
+
   # The built-in MCP's static `target` (desktop|ipad) can drift from the
-  # appliance's HID mode — today, and at RUNTIME once the mode is switchable.
-  # The single-source-of-truth fix is for the MCP to derive target from GET
-  # /hidmode (routed to the MCP node as a #51 follow-up); until then, surface the
-  # disagreement instead of letting it sit silent. Already null when the MCP
-  # module isn't imported (services.pikvm.mcp.target's own default).
+  # appliance's HID mode. The single-source-of-truth fix (the MCP deriving
+  # target from GET /hidmode instead of declaring it) shipped in #51 —
+  # hidmode-endpoint.nix forces `services.pikvm-mcp.target = null`
+  # (forceTargetNull) whenever its own endpoint is enabled, which by default
+  # is whenever the MCP is enabled too (hidMode.endpoint.enable's own
+  # default). That makes `mcpTarget` null (read below) and this warning
+  # structurally unable to fire on any of the 5 shipped hosts today. The
+  # shape it still catches: MCP DECLARED but DISABLED (e.g. zero2w's
+  # `services.pikvm-mcp.enable = false`) — forceTargetNull never fires there,
+  # so `mcp.target` keeps whatever static value it was declared with, which
+  # can silently disagree with this box's actual hidMode.default. Already
+  # null when the MCP module isn't imported at all
+  # (services.pikvm.mcp.target's own default).
   mcpTarget = config.services.pikvm.mcp.target;
   mcpTargetDisagrees = mcpTarget != null && mcpTarget != cfg.default;
 in
@@ -134,12 +150,15 @@ in
 
     default = lib.mkOption {
       type = lib.types.enum [ "desktop" "ipad" ];
-      default = "desktop";
+      default = config.services.pikvm.deployment.target.kind;
+      defaultText = lib.literalExpression "config.services.pikvm.deployment.target.kind";
       description = ''
         The FRESH-INSTALL mode. Seeds the mutable /var state exactly once; it is
         NOT re-applied on redeploy, so changing this on an already-provisioned
-        box does not move it (the runtime choice persists). Fresh-install default
-        is `desktop`, faithful to stock PiKVM.
+        box does not move it (the runtime choice persists). Defaults to
+        `services.pikvm.deployment.target.kind` (itself `desktop` by default,
+        faithful to stock PiKVM) — a host states its target once, in
+        `deployment.target`, rather than separately here too.
       '';
     };
 
@@ -225,8 +244,11 @@ in
           lib.concatMapStringsSep ", " (lib.concatStringsSep ".") userTouchedKeys
         }, but services.pikvm.kvmd.hidMode OWNS hid.mouse.absolute / hid.mouse.horizontal_wheel / hid.mouse_alt.device. hidMode's override (override.d/90) is read AFTER your settings (override.d/10) and WINS, so your value is ignored. Set the mode via hidMode instead, or set services.pikvm.kvmd.hidMode.enable = false to hand these keys back to `settings`.
       ''
+      ++ lib.optional targetKindDisagrees ''
+        services.pikvm.deployment.target.kind = "${deploymentCfg.target.kind}" disagrees with services.pikvm.kvmd.hidMode.default = "${cfg.default}". hidMode.default now derives from deployment.target.kind by default, so this box overrode one without the other. Make them match, or set hidMode.default explicitly if this box's fresh-install HID mode genuinely differs from its declared deployment target.
+      ''
       ++ lib.optional mcpTargetDisagrees ''
-        services.pikvm-mcp.target = "${mcpTarget}" disagrees with services.pikvm.kvmd.hidMode.default = "${cfg.default}". The appliance owns the HID mode (single source of truth); a static MCP target can drift from it — and after the runtime switch lands, they can disagree at runtime, which is worse. Make them match, or (the real fix, tracked as a #51 follow-up) let the MCP derive its target from the appliance's GET /hidmode instead of declaring it.
+        services.pikvm-mcp.target = "${mcpTarget}" disagrees with services.pikvm.kvmd.hidMode.default = "${cfg.default}". Whenever services.pikvm.kvmd.hidMode.endpoint is enabled, hidmode-endpoint.nix's forceTargetNull forces the MCP's target to null automatically and this can't fire — so seeing it means the endpoint isn't live for this target (most commonly: the MCP is declared but services.pikvm-mcp.enable = false, e.g. zero2w's shape). Make the declared target match this box's actual hidMode.default, or enable the MCP + its hidmode endpoint so forceTargetNull takes over.
       '';
     })
   ];

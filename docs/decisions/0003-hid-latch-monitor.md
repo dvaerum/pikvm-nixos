@@ -217,3 +217,14 @@ target-always-attached deployment to also detect the VBUS-latch second mode; a
 bound box in a state *outside* the set, e.g. stuck `addressed`, is unhealthy),
 `PIKVM_LATCH_STATUS_PATH=/run/pikvm-hid-latch/status.json`, plus the cadence /
 persistence knobs already in the bin.
+
+**Phase 4 update:** `PIKVM_LATCH_HEALTHY_STATE` is no longer set by hand per
+host — `healthyStates` (the nix option behind it) now DERIVES from
+`services.pikvm.deployment.target.alwaysAttached`: `false` (default, most
+boxes get legitimately unplugged) still produces `configured,not attached`;
+`true` (a target that's PERMANENTLY cabled — pikvm01's shape, described above)
+narrows it to just `configured`, opting into the VBUS-latch second mode this
+ADR names. A host states `alwaysAttached` once in `deployment.target`, in the
+same place it states its HID target `kind`, instead of separately overriding
+`healthyStates` here. Overriding `healthyStates` directly still works (a
+drift-guard warns if it ends up disagreeing with `alwaysAttached`).

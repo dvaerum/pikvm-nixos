@@ -22,6 +22,8 @@
       ../modules/kvmd.nix
       ../modules/otg.nix
       ../modules/runtime-paths.nix
+      ../modules/deployment.nix # hidMode.default's own default reads this (Phase 4)
+      ../modules/system/auto-upgrade.nix # deployment.nix's config unconditionally targets this option
       ../modules/mcp-integration.nix
       ../modules/nginx.nix # imports webterm.nix + hidmode-web.nix
       ../modules/hidmode.nix

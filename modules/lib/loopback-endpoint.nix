@@ -56,6 +56,12 @@ let
   tokenUnit = "pikvm-${name}-token";
   endpointUnit = "pikvm-${name}-endpoint";
 
+  # Finding 7: derive the token file's install mode/group from the SAME
+  # tokenChannel a consumer or test reads, instead of a hand-typed literal
+  # that can drift from it. tokenChannel.owner is "user:group" (or "user");
+  # `install -g` wants just the group.
+  tokenGroup = lib.last (lib.splitString ":" tokenChannel.owner);
+
   script = pkgs.writeText "${endpointUnit}.py" (
     handlerEnv
     + builtins.readFile ./loopback-endpoint-handler.py
@@ -92,13 +98,12 @@ lib.mkMerge [
         mkdir -p ${builtins.dirOf tokenChannel.path}
         ${
           if tokenFile != null then
-            ''install -m0640 -g ${user} ${tokenFile} ${tokenChannel.path}''
+            ''install -m${tokenChannel.mode} -g${tokenGroup} ${tokenFile} ${tokenChannel.path}''
           else
             ''
               if [ ! -s ${tokenChannel.path} ]; then
-                ( umask 027; head -c 32 /dev/urandom | base64 | tr -d '\n' > ${tokenChannel.path} )
-                chgrp ${user} ${tokenChannel.path}
-                chmod 0640 ${tokenChannel.path}
+                head -c 32 /dev/urandom | base64 | tr -d '\n' \
+                  | install -m${tokenChannel.mode} -g${tokenGroup} /dev/stdin ${tokenChannel.path}
               fi
             ''
         }

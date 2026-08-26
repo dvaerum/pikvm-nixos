@@ -18,7 +18,7 @@ let
   hidModeCfg = config.services.pikvm.kvmd.hidMode;
   hidRecoveryCfg = config.services.pikvm.hidRecovery;
 
-  # Each "channel" bundles the four facts a consumer or a test actually needs:
+  # Each "channel" bundles the three facts a consumer or a test actually needs:
   #   path          — the file/directory/configfs path itself.
   #   mode          — expected octal permission bits the producer lands the
   #                   artifact with, or null when not file-mode-meaningful.
@@ -27,17 +27,17 @@ let
   #                   channel whose real owner is itself a configurable
   #                   triggerUser derives it dynamically below, rather than
   #                   hardcoding a guess here).
-  #   producingUnit — the systemd unit responsible for creating/maintaining
-  #                   it, or null when there isn't one fixed unit (e.g. a
-  #                   CLI-written file with no single producer). Documents
-  #                   the contract and lets a VM test assert the RIGHT
-  #                   thing — docs/decisions/0003-hid-latch-monitor.md's
-  #                   "verify by stat, not a 200" gating note: an endpoint
-  #                   returning 200 only proves a SAME-USER (root, in every
-  #                   test here) read succeeded, never the artifact's real
-  #                   mode/owner as seen by the actual cross-user consumer —
-  #                   only a direct `stat` on `path` proves that.
-  # NOTE: none of these four fields are individually `readOnly` — `readOnly`
+  # Documents the contract and lets a VM test assert the RIGHT thing —
+  # docs/decisions/0003-hid-latch-monitor.md's "verify by stat, not a 200"
+  # gating note: an endpoint returning 200 only proves a SAME-USER (root, in
+  # every test here) read succeeded, never the artifact's real mode/owner as
+  # seen by the actual cross-user consumer — only a direct `stat` on `path`
+  # proves that.
+  #
+  # (A fourth field, `producingUnit`, existed here through Phase 3 but was
+  # removed for having zero consumers and no proposed one — see
+  # docs/FUTURE-WORK.md if a real consumer shows up later.)
+  # NOTE: none of these three fields are individually `readOnly` — `readOnly`
   # requires EXACTLY one definition, but every channel option below provides
   # its value as a whole-attrset OUTER `default`, which the submodule
   # machinery merges in as a definition of these inner fields ON TOP OF
@@ -63,11 +63,6 @@ let
         default = null;
         description = ''"user" or "user:group" the artifact should be owned by, or null.'';
       };
-      producingUnit = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "The systemd unit responsible for producing/maintaining this artifact, or null.";
-      };
     };
   };
 in
@@ -81,7 +76,6 @@ in
         path = "/run/pikvm-hid-latch/status.json";
         mode = "0644";
         owner = "root:root";
-        producingUnit = "pikvm-hid-latch-monitor.service";
       };
       description = ''
         The HID-latch monitor's atomically-written status.json, served by the
@@ -99,7 +93,6 @@ in
         path = "/run/pikvm-hidmode/token";
         mode = "0640";
         owner = "root:${hidModeCfg.triggerUser}";
-        producingUnit = "pikvm-hidmode-token.service";
       };
       description = ''
         The bearer token shared between the hidmode loopback endpoint
@@ -116,7 +109,6 @@ in
         path = "/run/pikvm-hidmode/mcp.env";
         mode = "0600";
         owner = "root:root";
-        producingUnit = "pikvm-hidmode-token.service";
       };
       description = "EnvironmentFile injecting PIKVM_HIDMODE_TOKEN into services.pikvm-mcp.";
     };
@@ -129,7 +121,6 @@ in
         path = "/run/pikvm-hid-recovery/token";
         mode = "0640";
         owner = "root:${hidRecoveryCfg.triggerUser}";
-        producingUnit = "pikvm-hid-recovery-token.service";
       };
       description = ''
         The bearer token shared between the HID-recovery loopback endpoint
@@ -145,7 +136,6 @@ in
         path = "/run/pikvm-hid-recovery/mcp.env";
         mode = "0600";
         owner = "root:root";
-        producingUnit = "pikvm-hid-recovery-token.service";
       };
       description = "EnvironmentFile injecting PIKVM_HID_RECOVERY_TOKEN into services.pikvm-mcp.";
     };
@@ -158,13 +148,12 @@ in
         path = "/var/lib/kvmd/hidmode.yaml";
         mode = null; # written by the pikvm-hidmode CLI at an arbitrary point in time, not one fixed producing unit
         owner = null;
-        producingUnit = null;
       };
       description = ''
         The boot-authoritative HID-mode override file kvmd-otg reads LAST (via
         override.d/90-hidmode.yaml) — the single source of truth for next-boot
         HID mode (#53). Written by the `pikvm-hidmode set` CLI, not a systemd
-        service, so mode/owner/producingUnit are deliberately null here.
+        service, so mode/owner are deliberately null here.
       '';
     };
 

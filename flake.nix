@@ -256,7 +256,6 @@
                 name = "pikvm-appliance-standalone";
                 drvPaths = [ (evalDrvPathOf sys) ];
               };
-
             # Standalone-composability gate: nixosModules.pikvm is documented
             # (below, this file) as importable WITHOUT nixosModules.mcp-server —
             # this check PROVES that, rather than leaving it an assertion nobody
@@ -311,6 +310,25 @@
                 name = "pikvm-module-standalone";
                 drvPaths = [ (evalDrvPathOf (mkSys [ stub ])) ];
               };
+
+            # modules/lib/octal.nix's fromOctal/toOctal round-trip, over every
+            # mode string actually used by a runtime-paths.nix channel today.
+            # Eval-only (an `assert`, not a VM) — this is pure Nix arithmetic,
+            # nothing here needs a system to boot.
+            octal-roundtrip =
+              let
+                octal = import ./modules/lib/octal.nix { inherit lib; };
+                cases = [
+                  "0644"
+                  "0640"
+                  "0600"
+                  "0755"
+                ];
+                bad = builtins.filter (m: octal.toOctal (octal.fromOctal m) != m) cases;
+              in
+              assert lib.assertMsg (bad == [ ])
+                "octal.nix: fromOctal/toOctal round-trip failed for: ${builtins.toJSON bad}";
+              pkgs.runCommand "pikvm-octal-roundtrip" { } "touch $out";
           }
         )
       );

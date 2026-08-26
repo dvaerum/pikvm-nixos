@@ -32,6 +32,8 @@ let
   statusChannel = config.services.pikvm.runtimePaths.hidLatchStatus;
   statusPath = statusChannel.path;
   statusDir = builtins.dirOf statusPath;
+
+  octal = import ./lib/octal.nix { inherit lib; };
 in
 {
   options.services.pikvm.hidLatchMonitor = {
@@ -147,13 +149,15 @@ in
         RestartSec = 5;
         # The status file the loopback endpoint serves. RuntimeDirectory is
         # 0755 so the (different-user) endpoint can traverse in and read the
-        # world-readable status.json. UMask=0022 makes the monitor's atomic
-        # write land at statusChannel.mode (0644) REGARDLESS of the inherited
-        # default — the endpoint runs as a different user, so the cross-user
-        # read must not depend on systemd's default umask staying 0022.
+        # world-readable status.json. UMask is DERIVED from statusChannel.mode
+        # (octal.nix's umaskFor) rather than a hand-typed literal, so the
+        # monitor's atomic write always lands at exactly the mode the channel
+        # declares — the endpoint runs as a different user, so the cross-user
+        # read must not depend on systemd's default umask, or on this value
+        # staying in sync with the channel by hand.
         RuntimeDirectory = builtins.baseNameOf statusDir;
         RuntimeDirectoryMode = "0755";
-        UMask = "0022";
+        UMask = octal.umaskFor statusChannel.mode;
         # Report-only reader: runs as root for `journalctl -k` + the configfs
         # corroboration read, but hardened + read-only everywhere except its own
         # /run status dir. It performs NO privileged writes (recovery is v2).

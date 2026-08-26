@@ -33,3 +33,19 @@ expansion bolted onto Finding 3's actual fix.
 
 Worth doing eventually for consistency and so a future path rename doesn't
 require hunting down every test's copy by hand — but not urgent.
+
+## `producingUnit` channel field, removed (Phase 3, Finding 7 fold-in)
+
+`modules/runtime-paths.nix`'s channel bundle originally carried a fourth
+field alongside `path`/`mode`/`owner`: `producingUnit`, the systemd unit
+responsible for creating/maintaining the artifact. Every channel populated
+it (or set it `null` for the one CLI-written, no-fixed-producer case), but
+nothing ever READ it — zero consumers, and no test or module had a proposed
+use for it either. Removed rather than left as unused scaffolding (same bar
+applied to ADR-0003's dead `verify` profile deletion).
+
+If a real consumer shows up later — e.g. a VM test that wants to assert
+"the channel's declared producer is actually the unit that writes this
+path", or tooling that needs to know which unit to restart after editing a
+channel's backing file by hand — re-add it then, with that consumer in the
+same change so the field has a reason to exist from day one.

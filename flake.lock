@@ -157,17 +157,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1787761919,
-        "narHash": "sha256-WB0zB0DUiLWttl9iVlhgTVPoe2+bk/9EIyXfFPJZzxo=",
+        "lastModified": 1787895122,
+        "narHash": "sha256-GzFbfJjStbUxOqBJxagu5kOrPEZDJb1GPvXvSvajkz4=",
         "owner": "dvaerum",
         "repo": "pikvm_mcp_server",
-        "rev": "b5fdc31e16525f196282436a0fa7ca797eea2e5e",
+        "rev": "2097bf971e5300e2897260bf6ef25b16927c9cc4",
         "type": "github"
       },
       "original": {
         "owner": "dvaerum",
         "repo": "pikvm_mcp_server",
-        "rev": "b5fdc31e16525f196282436a0fa7ca797eea2e5e",
+        "rev": "2097bf971e5300e2897260bf6ef25b16927c9cc4",
         "type": "github"
       }
     },

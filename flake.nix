@@ -47,7 +47,7 @@
     # `requested` from the boot-authoritative yaml; a src change so the MCP package
     # moves. Landed AFTER #53 so the wording never gets ahead of the semantics.)
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server/b5fdc31e16525f196282436a0fa7ca797eea2e5e";
+      url = "github:dvaerum/pikvm_mcp_server/2097bf971e5300e2897260bf6ef25b16927c9cc4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

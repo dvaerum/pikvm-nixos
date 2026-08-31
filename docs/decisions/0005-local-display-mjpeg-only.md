@@ -85,3 +85,55 @@ any live config.
 - Any future source beyond mjpeg (e.g. a lower-latency path) needs a fresh
   design that keeps the "kvmd's remote stream must never be starved"
   invariant explicit, not a `source` enum re-added casually.
+
+## Correction (2026-08-31, real-hardware round 2): stock `/streamer` needs auth
+
+it-03400 merged + deployed the decision above and found a second, real gap
+on real hardware: `https://127.0.0.1/streamer/stream` requires kvmd's admin
+session/Basic auth (`curl` unauthenticated → 401; `-u admin:admin` → 200,
+real MJPEG content). mpv's invocation carries no credentials — this module's
+own prior "UNVERIFIED on HW" comment on the mjpeg path was, once actually
+tested end-to-end, a confirmed gap, not a false alarm. Without it,
+local-display never renders at all (retry-loops on stream-open instead of
+the old device-contention crash) — a real regression this ADR's original
+verification (VM-only, stub-argv-only) couldn't have caught, since the stub
+never made an actual network request.
+
+**Rejected fix: embed the admin credential.** Considered and dropped — kvmd
+ships `admin:admin` as a changeable DEFAULT, not a fixed value; hardcoding it
+(even via sops, which the manager flagged as the required mechanism for any
+real secret here) creates a second, later, SILENT breakage the moment an
+operator rotates their password for a real reason. A local, on-box
+supervisor reading kvmd's own stream shouldn't need to track an admin
+credential's lifecycle at all.
+
+**Decision: a second, unauthenticated, loopback-only nginx location.**
+`services.pikvm.web.localStreamerBypass` (`modules/nginx.nix`) adds
+`/local-streamer`, proxying to the SAME `ustreamer` upstream as stock
+`/streamer`, gated by `allow 127.0.0.1; allow ::1; deny all;` +
+`auth_request off;` instead of kvmd's credential store. Real security, just
+IP-based rather than credential-based — appropriate here because the only
+caller is a systemd unit on the SAME box, not a remote client. Does not
+touch stock `/streamer`'s own auth requirement at all (additive, separate
+location). Auto-enabled (`mkDefault true`) whenever `localDisplay.enable` is
+true, same declarative-not-manual-toggle posture as `streamer.forever`.
+`local-display.nix`'s `streamUrl` default moves to
+`https://127.0.0.1/local-streamer/stream`; its systemd unit now also orders
+`after`/`wants` `nginx.service` (not just `kvmd.service`), and a new
+`localDisplay.enable -> services.pikvm.web.enable` assertion makes the
+now-real "mjpeg mode has nothing to connect to without the web front-door"
+misconfiguration fail eval instead of silently retry-looping forever.
+
+**Test gap closed too, not just the bug**: `tests/local-display.nix` now
+imports `nginx.nix` (transitively, via `local-display.nix`'s own `imports`
+— a real dependency now, not an ambient one) and issues a REAL `curl` of
+`/local-streamer/stream` over the VM's real nginx, asserting a genuine `200`
+— the specific check that would have caught this regression before it ever
+reached real hardware. An argv-only assertion structurally cannot see an
+auth failure; only a live request over the real route can. (One nuance hit
+building this check: ustreamer's `/stream` is a genuinely infinite
+`multipart/x-mixed-replace` response by design, so `curl` gets the `200`
+status almost instantly but then blocks on the never-ending body until
+`--max-time` kills it — curl's own exit code is a timeout even on full
+success. The test asserts on the printed status code via `machine.execute`,
+not on curl's exit code via `machine.succeed`.)

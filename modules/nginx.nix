@@ -10,6 +10,11 @@
 #   /api/media*  → kvmd-media (unix:/run/kvmd/media.sock)
 #   /redfish     → kvmd
 #   /mcp         → the PiKVM MCP server (Streamable HTTP)
+#   /local-streamer → ustreamer MJPEG, UNAUTHENTICATED but loopback-only
+#                  (127.0.0.1/::1 allowlist, `deny all` otherwise) — for an
+#                  on-box client that needs the stream without depending on
+#                  kvmd's admin credentials (see services.pikvm.web
+#                  .localStreamerBypass below). Off by default.
 # The /janus/ws WebRTC blocks are carried verbatim from stock; the janus.js /
 # adapter.js static aliases are path-patched the same way the web root is
 # (see serverConf below — pkgs.pikvm.janus-web-client, added 2026-08-20).
@@ -196,6 +201,25 @@ in
       default = "/run/kvmd/kvmd.sock";
       description = "kvmd's HTTP API unix socket (the nginx `kvmd` upstream target).";
     };
+
+    localStreamerBypass.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Serve ustreamer's MJPEG output at `/local-streamer`, UNAUTHENTICATED,
+        gated instead by an nginx `allow 127.0.0.1; allow ::1; deny all;`
+        IP-allowlist — real security, just a different kind than kvmd's admin
+        credentials, and one that can't silently break when an operator
+        rotates their kvmd password (task_c9df75066f71, 2026-08-31: found on
+        real hardware that stock `/streamer` requiring kvmd auth broke
+        local-display's mjpeg-mode client outright — it carried zero
+        credentials). Does NOT touch stock `/streamer`'s own auth requirement;
+        this is a separate, additive location. Off by default; auto-enabled
+        by services.pikvm.localDisplay whenever it's enabled — not meant to
+        be set directly except by some other future on-box, loopback-only
+        consumer with the identical need.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -287,6 +311,26 @@ in
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
           }
+
+          ${lib.optionalString cfg.localStreamerBypass.enable ''
+            # Loopback-only ustreamer MJPEG, no kvmd auth — see the
+            # localStreamerBypass option doc for why. Mirrors stock's own
+            # /streamer location's rewrite/proxy shape exactly, just under a
+            # distinct path with allow/deny + auth_request off instead of the
+            # inherited server-level `auth_request /auth_check;`.
+            location /local-streamer {
+              allow 127.0.0.1;
+              allow ::1;
+              deny all;
+              auth_request off;
+              rewrite ^/local-streamer$ / break;
+              rewrite ^/local-streamer\?(.*)$ ?$1 break;
+              rewrite ^/local-streamer/(.*)$ /$1 break;
+              proxy_pass http://ustreamer;
+              include /etc/kvmd/nginx/loc-proxy.conf;
+              include /etc/kvmd/nginx/loc-nobuffering.conf;
+            }
+          ''}
         '';
       };
     };

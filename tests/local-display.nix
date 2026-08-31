@@ -33,13 +33,21 @@
 #             docs/learnings/systemd-devicepolicy-auto.md);
 #         (c) the stub's captured argv has the right --drm-connector and reads
 #             ustreamer's own stream URL, never a raw v4l2 device (mjpeg is
-#             the only mode since task_c9df75066f71, 2026-08-31);
+#             the only mode since task_c9df75066f71, 2026-08-31) — AND the
+#             stub's own real curl of that URL, over the VM's real nginx,
+#             got a genuine 200. This second half is load-bearing: an argv
+#             that merely LOOKS right was exactly what shipped broken to
+#             real hardware once (a 401 against kvmd's auth) — only an
+#             actual network round-trip over the real localStreamerBypass
+#             route catches that class of regression;
 #         (d) removing the rendered connector and connecting a different one
 #             makes the supervisor re-render onto it (auto mode).
 #
-# (1) also asserts services.pikvm.kvmd.settings.kvmd.streamer.forever is
-# auto-set true whenever localDisplay is enabled — the pairing fix that keeps
-# kvmd from idle-stopping ustreamer out from under this mode's mpv client.
+# (1) also asserts services.pikvm.kvmd.settings.kvmd.streamer.forever and
+# services.pikvm.web.localStreamerBypass.enable are both auto-set true
+# whenever localDisplay is enabled — the pairing fixes that keep kvmd from
+# idle-stopping ustreamer out from under this mode's mpv client, and give
+# that client an unauthenticated route to actually read from.
 { self, pkgs }:
 let
   lib = pkgs.lib;
@@ -70,6 +78,13 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
   pikvm-local-display: TTYPath must agree with ${gettyUnit} (both derived from
   the same `vt` option). Got: ${svc.serviceConfig.TTYPath}
 '';
+assert lib.assertMsg (hostCfg.services.pikvm.web.localStreamerBypass.enable == true) ''
+  pikvm-local-display: services.pikvm.web.localStreamerBypass.enable must be
+  auto-set true whenever localDisplay is enabled — without it mjpeg mode has
+  no unauthenticated route to read (stock /streamer needs kvmd admin
+  credentials this player carries none of; found failing outright on real
+  hardware, task_c9df75066f71, 2026-08-31). Got: ${builtins.toJSON hostCfg.services.pikvm.web.localStreamerBypass.enable or null}
+'';
 {
   name = "pikvm-local-display";
 
@@ -95,10 +110,13 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     in
     {
       imports = [
-        # kvmd.nix transitively imports otg.nix — see module-list.nix /
-        # Round-2 Phase 2 for why each module now imports its own declarers.
-        # local-display.nix is a leaf (nothing else imports it), so it still
-        # needs listing explicitly.
+        # kvmd.nix transitively imports otg.nix; local-display.nix
+        # transitively imports nginx.nix (mjpeg mode's localStreamerBypass
+        # route is a real dependency now, not just an ambient one from a
+        # higher bundle — see local-display.nix's own `imports`) — see
+        # module-list.nix / Round-2 Phase 2 for why each module imports its
+        # own declarers. local-display.nix is a leaf beyond that (nothing
+        # else imports IT), so it still needs listing explicitly.
         ../modules/kvmd.nix
         ../modules/local-display.nix
         self.nixosModules.mcp-server # declares services.pikvm-mcp (left off here)
@@ -140,6 +158,7 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     start_all()
     machine.wait_for_unit("kvmd-otg.service")
     machine.wait_for_unit("kvmd.service")
+    machine.wait_for_unit("nginx.service")
     machine.wait_for_unit("pikvm-local-display.service")
 
     # (2a) the unit survives — no DeviceAllow/DevicePolicy crash-loop. Give it
@@ -171,6 +190,28 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     assert "--drm-connector=HDMI-A-2" in argv, argv
     assert "streamer/stream" in argv, argv
     assert "v4l2" not in argv, argv
+
+    # (2c, cont.) the REAL network hop, issued directly (not via the stub —
+    # an earlier version raced ustreamer's own async socket-bind and got a
+    # transient 502; issuing it here, after the same 20s startup grace (2a)
+    # already gave kvmd/ustreamer, avoids that race). This is the specific
+    # check that would have caught task_c9df75066f71's real-hardware
+    # regression (an argv that looked right but 401'd against kvmd's auth)
+    # — an argv-only assertion can't see an auth failure, only a live
+    # request over the loopback localStreamerBypass route can.
+    #
+    # execute(), not succeed(): ustreamer's /stream is a genuinely infinite
+    # multipart/x-mixed-replace MJPEG response by design (a live streamer
+    # never closes it on its own) — curl gets the "200" status/headers
+    # almost instantly but then blocks reading the never-ending body until
+    # --max-time kills it, so curl's OWN exit code is a timeout (28) even on
+    # a fully successful request. succeed() raises on that nonzero exit
+    # regardless of what was printed; execute() just returns it, so only the
+    # printed status code (the actual fact under test) is asserted on.
+    _, http_code = machine.execute(
+        "${pkgs.curl}/bin/curl -sk --max-time 3 -o /dev/null -w '%{http_code}' https://127.0.0.1/local-streamer/stream"
+    )
+    assert http_code == "200", f"/local-streamer/stream returned {http_code!r}, expected 200 (unauthenticated loopback bypass not working)"
 
     # (2d) move the cable: HDMI-A-2 disconnects, HDMI-A-1 connects. auto mode
     # should re-render onto HDMI-A-1 within its ~2s poll cadence.

@@ -89,6 +89,7 @@
 }:
 let
   cfg = config.services.pikvm.localDisplay;
+  webCfg = config.services.pikvm.web;
 
   # Player args (mpv-shaped), WITHOUT the binary and WITHOUT --drm-connector (the
   # connector is chosen at runtime by the supervisor per `mode`).
@@ -176,6 +177,14 @@ let
   gettyUnit = "getty@tty${toString cfg.vt}.service";
 in
 {
+  # nginx.nix: mjpeg mode reads its localStreamerBypass location for real
+  # now (see `config` below) — this module reads AND sets config.services
+  # .pikvm.web.*, so it imports its declarer directly rather than relying on
+  # a higher bundle (module-list.nix) to have brought it along, same
+  # convention hidmode.nix/kvmd.nix already follow for their own
+  # cross-module reads.
+  imports = [ ./nginx.nix ];
+
   options.services.pikvm.localDisplay = {
     enable = lib.mkEnableOption ''
       the local DRM/KMS display that mirrors the captured HDMI-IN feed to one of
@@ -219,14 +228,19 @@ in
 
     streamUrl = lib.mkOption {
       type = lib.types.str;
-      default = "https://127.0.0.1/streamer/stream";
+      default = "https://127.0.0.1/local-streamer/stream";
       description = ''
-        MJPEG stream URL the player reads from — the loopback nginx streamer
-        endpoint (proxies to ustreamer, the SAME feed the web UI serves), never
-        the raw capture device (see the file header for why: single-open
-        contention with kvmd's own ustreamer, removed 2026-08-31). That vhost is
-        self-signed TLS so the player is invoked with certificate verification
-        disabled.
+        MJPEG stream URL the player reads from — `/local-streamer`
+        (modules/nginx.nix's `services.pikvm.web.localStreamerBypass`,
+        auto-enabled below), a loopback-only, UNAUTHENTICATED proxy to
+        ustreamer's own output (the SAME feed the web UI serves), never the
+        raw capture device (see the file header for why: single-open
+        contention with kvmd's own ustreamer, removed 2026-08-31). NOT the
+        stock `/streamer` path — that requires kvmd's admin credentials,
+        which this player carries none of (found on real hardware,
+        task_c9df75066f71: mpv's stream-open failed outright against stock
+        `/streamer`, a 401). The vhost is self-signed TLS regardless of path,
+        so the player is invoked with certificate verification disabled.
       '';
     };
 
@@ -287,6 +301,17 @@ in
           (HW-confirmed regression, it-03400 2026-08-24).
         '';
       }
+      {
+        assertion = webCfg.enable;
+        message = ''
+          pikvm-local-display: services.pikvm.web.enable must be true —
+          mjpeg mode (the only mode, since 2026-08-31) reads the capture
+          exclusively through the web front-door's /local-streamer route
+          (modules/nginx.nix). With the front-door off there is nothing for
+          it to connect to; local-display would just retry-fail forever.
+          Turn services.pikvm.web back on, or leave localDisplay disabled.
+        '';
+      }
     ];
 
     # Declarative, not a manual toggle a future re-image can lose (same
@@ -298,17 +323,33 @@ in
     # the file header) — holds by default whenever local-display is enabled.
     services.pikvm.kvmd.settings.kvmd.streamer.forever = lib.mkDefault true;
 
+    # mjpeg mode reads /local-streamer (modules/nginx.nix), not stock's
+    # authenticated /streamer — this player carries no kvmd credentials, and
+    # never should (a hardcoded/rotating admin password is exactly the kind
+    # of fragile coupling a local, on-box supervisor shouldn't need). Found
+    # missing on real hardware, task_c9df75066f71, 2026-08-31: without this,
+    # mpv's stream-open fails outright (401), the module's old "UNVERIFIED on
+    # HW" comment on this exact path having been a confirmed gap, not a
+    # false alarm.
+    services.pikvm.web.localStreamerBypass.enable = lib.mkDefault true;
+
     systemd.services.pikvm-local-display = {
       description = "PiKVM local DRM display (mirror captured HDMI-IN to a micro-HDMI output)";
       wantedBy = [ "multi-user.target" ];
-      # kvmd owns the ustreamer subprocess that serves the MJPEG stream, so the
-      # stream exists once kvmd is up. Not BindsTo/Requires: a streamer hiccup
-      # should not tear the display down — the supervisor retries.
+      # kvmd owns the ustreamer subprocess that serves the MJPEG stream, and
+      # nginx owns the /local-streamer route mjpeg mode actually reads —
+      # both exist once up. Not BindsTo/Requires on either: a streamer or
+      # nginx hiccup should not tear the display down — the supervisor
+      # retries.
       after = [
         "kvmd.service"
+        "nginx.service"
         gettyUnit
       ];
-      wants = [ "kvmd.service" ];
+      wants = [
+        "kvmd.service"
+        "nginx.service"
+      ];
       # NixOS's getty module aliases autovt@.service to getty@.service, and
       # logind hardcodes spawning autovt@ttyN.service on any VT switch — so
       # without this, a physical switch to the VT races a getty against mpv

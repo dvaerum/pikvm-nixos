@@ -31,16 +31,22 @@
 #             this test asserting DevicePolicy=="closed" failed with "auto"
 #             even though (a) above proves the restriction IS live. See
 #             docs/learnings/systemd-devicepolicy-auto.md);
-#         (c) the stub's captured argv has the right --drm-connector and the
-#             --demuxer-lavf-o=input_format=mjpeg hint;
+#         (c) the stub's captured argv has the right --drm-connector and reads
+#             ustreamer's own stream URL, never a raw v4l2 device (mjpeg is
+#             the only mode since task_c9df75066f71, 2026-08-31);
 #         (d) removing the rendered connector and connecting a different one
 #             makes the supervisor re-render onto it (auto mode).
+#
+# (1) also asserts services.pikvm.kvmd.settings.kvmd.streamer.forever is
+# auto-set true whenever localDisplay is enabled — the pairing fix that keeps
+# kvmd from idle-stopping ustreamer out from under this mode's mpv client.
 { self, pkgs }:
 let
   lib = pkgs.lib;
 
   # (1) Static unit-shape assertions, off the real it-03400 host config.
   svc = self.nixosConfigurations.it-03400.config.systemd.services.pikvm-local-display;
+  hostCfg = self.nixosConfigurations.it-03400.config;
   gettyUnit = "getty@tty2.service"; # it-03400 uses the vt default (2)
 in
 assert lib.assertMsg (lib.elem "char-tty rw" svc.serviceConfig.DeviceAllow) ''
@@ -52,6 +58,13 @@ assert lib.assertMsg (lib.elem "char-tty rw" svc.serviceConfig.DeviceAllow) ''
 assert lib.assertMsg (lib.elem gettyUnit svc.conflicts) ''
   pikvm-local-display: Conflicts must contain ${gettyUnit} (races mpv for VT
   ownership on a physical VT switch otherwise). Got: ${builtins.toJSON svc.conflicts}
+'';
+assert lib.assertMsg (hostCfg.services.pikvm.kvmd.settings.kvmd.streamer.forever == true) ''
+  pikvm-local-display: services.pikvm.kvmd.settings.kvmd.streamer.forever must
+  be auto-set true whenever localDisplay is enabled — without it kvmd can
+  idle-stop ustreamer out from under an actively-streaming mpv client (its
+  own WS-client accounting is blind to local-display's nginx-proxied mjpeg
+  connection; task_c9df75066f71, 2026-08-31). Got: ${builtins.toJSON hostCfg.services.pikvm.kvmd.settings.kvmd.streamer.forever or null}
 '';
 assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
   pikvm-local-display: TTYPath must agree with ${gettyUnit} (both derived from
@@ -151,11 +164,13 @@ assert lib.assertMsg (svc.serviceConfig.TTYPath == "/dev/tty2") ''
     assert device_allow != "", "DeviceAllow is empty at runtime — the unit has no device restriction at all"
 
     # (2c) the stub captured the right argv: rendering on the connected fake
-    # connector (HDMI-A-2), with the load-bearing mjpeg demuxer hint.
+    # connector (HDMI-A-2), reading the shared ustreamer stream (never a raw
+    # v4l2 device — that mode no longer exists, task_c9df75066f71 2026-08-31).
     machine.wait_for_file("/run/argv")
     argv = machine.succeed("cat /run/argv")
     assert "--drm-connector=HDMI-A-2" in argv, argv
-    assert "--demuxer-lavf-o=input_format=mjpeg" in argv, argv
+    assert "streamer/stream" in argv, argv
+    assert "v4l2" not in argv, argv
 
     # (2d) move the cable: HDMI-A-2 disconnects, HDMI-A-1 connects. auto mode
     # should re-render onto HDMI-A-1 within its ~2s poll cadence.

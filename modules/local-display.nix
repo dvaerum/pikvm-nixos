@@ -62,6 +62,25 @@
 # See docs/decisions/0004-local-display.md for the VM-testability design (the
 # sysfsDrmRoot/vt options, the mpv-stub pattern, the DeviceAllow structural
 # guard) added 2026-08-24.
+#
+# ⚠️ 2026-08-31 (task_c9df75066f71, georg via manager): the `v4l2` source mode
+# is GONE — `mjpeg` (consuming ustreamer's own output through nginx) is now
+# the ONLY mode. WHY: v4l2 opened /dev/kvmd-video directly, single-open, in
+# genuine unrefereed contention with kvmd's own ustreamer for the SAME
+# device — real, observed on it-03400 ("whichever restarts/retries first
+# wins," no negotiation anywhere). The appliance's core function is the
+# REMOTE video stream; local-display's HDMI-out mirror is secondary and must
+# never be able to starve it. Removing the exclusive-open path is a
+# structural fix (the race is architecturally impossible, not arbitrated) —
+# not a toggle a future edit can flip back. See docs/decisions/0005-local-display-mjpeg-only.md.
+#
+# Paired with that: `streamer.forever` is now auto-set whenever this module
+# is enabled (see `config` below) — mjpeg mode reads ustreamer's HTTP output
+# via nginx, which kvmd's own idle-stop accounting (kvmd/apps/kvmd/server.py's
+# `__stream_controller`, counts only kvmd's OWN WebSocket `stream=1` clients)
+# is blind to; without `forever`, kvmd would silently kill ustreamer under an
+# actively-streaming mpv once its own WS client count hits 0. Confirmed
+# against kvmd 4.188's real source, not assumed.
 {
   config,
   lib,
@@ -81,22 +100,10 @@ let
     "--loop=inf" # a systemd service should survive the source ending
   ]
   ++ lib.optional (cfg.drmDevice != null) "--drm-device=${cfg.drmDevice}"
-  ++ (
-    if cfg.source == "v4l2" then
-      [
-        "--untimed"
-        # LOAD-BEARING: without input_format=mjpeg the dongle negotiates raw YUYV
-        # over USB2 and drops to ~5 fps at 1080p (measured, it-03400). The MJPEG
-        # hint is what buys 30 fps.
-        "--demuxer-lavf-o=input_format=mjpeg,video_size=${cfg.captureResolution},framerate=${toString cfg.captureFramerate}"
-        "av://v4l2:${cfg.device}"
-      ]
-    else
-      [
-        "--tls-verify=no" # loopback nginx streamer is self-signed
-        cfg.streamUrl
-      ]
-  )
+  ++ [
+    "--tls-verify=no" # loopback nginx streamer is self-signed
+    cfg.streamUrl
+  ]
   ++ cfg.extraArgs;
 
   # Supervisor. `mode` picks the target connector:
@@ -130,19 +137,11 @@ let
         drm_root=${lib.escapeShellArg cfg.sysfsDrmRoot}
         mpv_exe=${lib.escapeShellArg (lib.getExe cfg.package)}
         player_args=(${lib.escapeShellArgs playerArgs})
-        ${lib.optionalString (cfg.source == "v4l2") ''
-          # v4l2 is single-open: while this holds the capture device the web KVM's
-          # video is unavailable (first grabber wins). Say so loudly — a dark remote
-          # view is otherwise a silent, confusing failure of the KVM's main job.
-          echo "pikvm-local-display: source=v4l2 holds ${cfg.device} EXCLUSIVELY — the web UI video is UNAVAILABLE while this runs." >&2
-        ''}
-        ${lib.optionalString (cfg.source == "mjpeg") ''
-          # mjpeg reads the shared stream, so the web UI keeps working. This relies
-          # on mpv-as-a-persistent-client keeping kvmd's on-demand streamer up.
-          # UNVERIFIED on HW — if kvmd drops the streamer despite an active client,
-          # an explicit kvmd always-on config is the follow-up.
-          echo "pikvm-local-display: source=mjpeg — keeping the shared stream open (streamer-always-on via a persistent client; UNVERIFIED on HW)." >&2
-        ''}
+        # Reads ustreamer's own output via nginx (never the raw capture
+        # device) — the web KVM stays available while this runs, and
+        # `streamer.forever` (auto-set below whenever this module is
+        # enabled) keeps kvmd from idle-stopping ustreamer out from under it.
+        echo "pikvm-local-display: reading the shared ustreamer stream via ${cfg.streamUrl} — the web UI stays available." >&2
       ''
       + builtins.readFile ./local-display-run.sh;
   };
@@ -162,17 +161,16 @@ let
   # crash-loop stop AND auto-mode render for real (kernel-level scanout
   # check, not just the app's own self-report).
   #
-  # STRUCTURAL GUARD, not just a comment: `mandatoryDeviceAllow` is the ONLY
-  # place this pair is written, kept separate from the v4l2-conditional
-  # addition below so a future extra device rule gets appended to a NEW list
-  # rather than edited into this one — and the assertion in `config` fails
-  # eval loudly if it's ever dropped anyway, instead of silently reintroducing
-  # the crash.
-  mandatoryDeviceAllow = [
+  # STRUCTURAL GUARD, not just a comment: this is the ONLY place this pair is
+  # written — the assertion in `config` fails eval loudly if it's ever
+  # dropped, instead of silently reintroducing the crash. (No raw capture
+  # device to allow here since 2026-08-31 — mjpeg-only, see the file header —
+  # so this narrows the sandbox further than it used to, structurally: this
+  # unit no longer CAN open /dev/kvmd-video even if a future edit tried.)
+  deviceAllow = [
     "char-drm rw"
     "char-tty rw"
   ];
-  deviceAllow = mandatoryDeviceAllow ++ lib.optional (cfg.source == "v4l2") "${cfg.device} rw";
 
   ttyPath = "/dev/tty${toString cfg.vt}";
   gettyUnit = "getty@tty${toString cfg.vt}.service";
@@ -219,57 +217,17 @@ in
       '';
     };
 
-    source = lib.mkOption {
-      type = lib.types.enum [
-        "v4l2"
-        "mjpeg"
-      ];
-      default = "v4l2";
-      description = ''
-        Where the player reads video from.
-
-        `v4l2` (default): read the capture device directly — measured working at
-        1080p30. Lower latency, but the device is SINGLE-OPEN, so while local
-        display runs the web UI's video is unavailable (they can't both hold
-        /dev/kvmd-video). The service logs this loudly.
-
-        `mjpeg`: consume the shared ustreamer MJPEG stream so the browser UI keeps
-        working too. Relies on mpv-as-a-persistent-client keeping kvmd's on-demand
-        streamer alive — UNVERIFIED on HW (if kvmd drops it, an explicit always-on
-        config is the follow-up).
-      '';
-    };
-
     streamUrl = lib.mkOption {
       type = lib.types.str;
       default = "https://127.0.0.1/streamer/stream";
       description = ''
-        MJPEG stream URL for `source = "mjpeg"`. Defaults to the loopback nginx
-        streamer endpoint; that vhost is self-signed TLS so the player is invoked
-        with certificate verification disabled. Ignored for `v4l2`.
+        MJPEG stream URL the player reads from — the loopback nginx streamer
+        endpoint (proxies to ustreamer, the SAME feed the web UI serves), never
+        the raw capture device (see the file header for why: single-open
+        contention with kvmd's own ustreamer, removed 2026-08-31). That vhost is
+        self-signed TLS so the player is invoked with certificate verification
+        disabled.
       '';
-    };
-
-    device = lib.mkOption {
-      type = lib.types.str;
-      default = "/dev/kvmd-video";
-      description = "V4L2 capture device for `source = \"v4l2\"`.";
-    };
-
-    captureResolution = lib.mkOption {
-      type = lib.types.str;
-      default = "1920x1080";
-      description = ''
-        Capture resolution for the `v4l2` demuxer hint (`WIDTHxHEIGHT`). Default is
-        the capture dongle's hardware ceiling (measured) — there is no higher mode
-        to select.
-      '';
-    };
-
-    captureFramerate = lib.mkOption {
-      type = lib.types.int;
-      default = 30;
-      description = "Capture framerate for the `v4l2` demuxer hint.";
     };
 
     drmDevice = lib.mkOption {
@@ -331,6 +289,15 @@ in
       }
     ];
 
+    # Declarative, not a manual toggle a future re-image can lose (same
+    # rationale hosts/pikvm01.nix already documents for its own reason).
+    # mkDefault: a host that has some other explicit need can still override
+    # it, but the module's own requirement — this mode must never let kvmd
+    # idle-stop ustreamer out from under it, since kvmd's client-count
+    # accounting can't see mjpeg's nginx-proxied HTTP connection at all (see
+    # the file header) — holds by default whenever local-display is enabled.
+    services.pikvm.kvmd.settings.kvmd.streamer.forever = lib.mkDefault true;
+
     systemd.services.pikvm-local-display = {
       description = "PiKVM local DRM display (mirror captured HDMI-IN to a micro-HDMI output)";
       wantedBy = [ "multi-user.target" ];
@@ -366,7 +333,7 @@ in
         StandardError = "journal";
         TTYReset = true;
         TTYVTDisallocate = true;
-        # DRM/KMS render + (for v4l2) the capture device live in these groups.
+        # DRM/KMS render lives in these groups.
         SupplementaryGroups = [
           "video"
           "render"

@@ -46,8 +46,17 @@
     # pending / will boot into X" — the matched pair to appliance #53, which sources
     # `requested` from the boot-authoritative yaml; a src change so the MCP package
     # moves. Landed AFTER #53 so the wording never gets ahead of the semantics.)
+    # 5b2918b = a4bb815 + #99: adds the PIKVM_ML_DISABLE_CPU_MEM_ARENA opt-in
+    # (services.pikvm.mcp.extraEnv, set on it-03400 — hosts/it-03400.nix) that
+    # cuts the cascade verifier's ONNX Runtime CPU arena allocation, confirmed
+    # on real it-03400 hardware: ~9x steady-state RSS reduction on the first
+    # real cascade call (2.89GB → 319.8MB), root-caused as the direct trigger
+    # behind a full day of recurring OOM/whole-system-starvation incidents on
+    # this 3.6GB box. Bumped for that fix alone (task_3a0440a91a05's cache
+    # pre-filter work landed on the same day but on a separate branch, not in
+    # this pin).
     pikvm-mcp-server = {
-      url = "github:dvaerum/pikvm_mcp_server/2097bf971e5300e2897260bf6ef25b16927c9cc4";
+      url = "github:dvaerum/pikvm_mcp_server/5b2918ba541f47c94593ea2785b36c9f8f679899";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -29,4 +29,19 @@
     enable = true;
     captureConnector = "HDMI-A-1";
   };
+
+  # PIKVM_ML_DISABLE_CPU_MEM_ARENA=1 (pikvm_mcp_server #99): disables the
+  # cascade verifier's ONNX Runtime CPU memory arena. Confirmed on this exact
+  # hardware (2026-09-01): the arena is the direct root cause of a full day
+  # of recurring OOM/whole-system-starvation incidents — with it enabled
+  # (the default), the FIRST real cascade call (e.g. pikvm_hid_recover, which
+  # calls findCursorByV8FullFrame) permanently grows pikvm-mcp's RSS from
+  # ~123MB to 2.89GB for the rest of the process's life, on a box with only
+  # 3.6GB total RAM. With the flag set, the same call peaks at 1.51GB
+  # transient and settles to 319.8MB steady-state — ~9x less. No accuracy
+  # cost expected (arena allocator is purely a performance/reuse
+  # optimization, not a correctness one), but this hasn't been separately
+  # timing-benchmarked here — if cascade latency regresses meaningfully on
+  # real hardware, that's the tradeoff to revisit.
+  services.pikvm.mcp.extraEnv.PIKVM_ML_DISABLE_CPU_MEM_ARENA = "1";
 }
